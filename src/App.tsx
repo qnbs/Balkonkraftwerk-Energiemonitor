@@ -1,16 +1,18 @@
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
-import { Activity, BookOpen, Wrench, Settings as SettingsIcon, Bell, X, Sun, Moon, Zap, TrendingUp } from 'lucide-react';
+import { Activity, BookOpen, Wrench, Settings as SettingsIcon, Bell, X, Sun, Moon, Zap, TrendingUp, Cpu } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useTransform, type PanInfo } from 'motion/react';
 import { Toaster, toast } from 'sonner';
 import { ErrorBoundary, OfflineBanner } from './components/ui/ErrorBoundary';
 import { DashboardSkeleton } from './components/ui/Skeleton';
 import { getStoredTheme, setStoredTheme, type Theme } from './lib/theme';
+import { isLiveMode, setLiveMode } from './lib/esp32';
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const Manual = lazy(() => import('./components/Manual'));
 const Materials = lazy(() => import('./components/Materials'));
 const Settings = lazy(() => import('./components/Settings'));
 const Economics = lazy(() => import('./components/Economics'));
+const Hardware = lazy(() => import('./components/Hardware'));
 
 export type Notification = {
   id: string;
@@ -32,6 +34,7 @@ const tabs = [
   { id: 'manual', label: 'Montage', icon: BookOpen },
   { id: 'materials', label: 'Material', icon: Wrench },
   { id: 'economics', label: 'Rendite', icon: TrendingUp },
+  { id: 'hardware', label: 'ESP32', icon: Cpu },
   { id: 'settings', label: 'Setup', icon: SettingsIcon },
 ] as const;
 
@@ -44,8 +47,14 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('dashboard');
   const [showNotifications, setShowNotifications] = useState(false);
   const [theme, setTheme] = useState<Theme>(getStoredTheme);
+  const [liveMode, setLiveModeState] = useState(isLiveMode);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [swipeDirection, setSwipeDirection] = useState<1 | -1>(1);
+
+  const handleLiveModeChange = (v: boolean) => {
+    setLiveMode(v);
+    setLiveModeState(v);
+  };
   const mainRef = useRef<HTMLElement>(null);
   const dragX = useMotionValue(0);
   const dragOpacity = useTransform(dragX, [-200, 0, 200], [0.5, 1, 0.5]);
@@ -324,10 +333,11 @@ export default function App() {
               transition={{ duration: 0.2, ease: 'easeInOut' }}
             >
               <Suspense fallback={<DashboardSkeleton />}>
-                {activeTab === 'dashboard' && <Dashboard thresholds={thresholds} addNotification={addNotification} />}
+                {activeTab === 'dashboard' && <Dashboard liveMode={liveMode} thresholds={thresholds} addNotification={addNotification} />}
                 {activeTab === 'manual' && <Manual />}
                 {activeTab === 'materials' && <Materials />}
                 {activeTab === 'economics' && <Economics />}
+                {activeTab === 'hardware' && <Hardware liveMode={liveMode} onLiveModeChange={handleLiveModeChange} />}
                 {activeTab === 'settings' && (
                   <Settings thresholds={thresholds} setThresholds={setThresholds} theme={theme} toggleTheme={toggleTheme} />
                 )}

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from 'recharts';
-import { Zap, Sun, ArrowDownToLine, ArrowUpFromLine, Clock, TrendingUp, Sparkles, Leaf, Euro, Loader2, CloudSun, CalendarDays } from 'lucide-react';
+import { Zap, Sun, ArrowDownToLine, ArrowUpFromLine, Clock, TrendingUp, Sparkles, Leaf, Euro, Loader2, CloudSun, CalendarDays, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import type { Thresholds, Notification } from '../App';
@@ -12,10 +12,12 @@ import {
 } from '../lib/simulation';
 import { analyzeEnergyData, forecastEnergyData, hasApiKey, type ForecastInput, type DayForecast } from '../lib/gemini';
 import { fetchWeatherForecast, getWeatherCache, weatherToSolar, WeatherRateLimitError, type WeatherForecast } from '../lib/weather';
+import { fetchEsp32Data, getEsp32Url } from '../lib/esp32';
 
 interface DashboardProps {
   thresholds: Thresholds;
   addNotification: (notif: Omit<Notification, 'id' | 'timestamp' | 'read'>) => void;
+  liveMode: boolean;
 }
 
 const RANGES: { key: TimeRange; label: string }[] = [
@@ -24,7 +26,7 @@ const RANGES: { key: TimeRange; label: string }[] = [
   { key: 'monthly', label: 'Monat' },
 ];
 
-export default function Dashboard({ thresholds, addNotification }: DashboardProps) {
+export default function Dashboard({ thresholds, addNotification, liveMode }: DashboardProps) {
   const [timeRange, setTimeRange] = useState<TimeRange>(() =>
     (localStorage.getItem('bkw-timerange') as TimeRange) || 'daily',
   );
@@ -46,19 +48,41 @@ export default function Dashboard({ thresholds, addNotification }: DashboardProp
   const [rateLimitWarning, setRateLimitWarning] = useState('');
   const [forecastDays, setForecastDays] = useState<DayForecast[] | null>(null);
 
+  // Live mode error
+  const [liveError, setLiveError] = useState<string | null>(null);
+
   useEffect(() => {
     localStorage.setItem('bkw-timerange', timeRange);
     setData(generateData(timeRange));
   }, [timeRange]);
 
-  // Live simulation every 3s
+  // Live simulation OR real ESP32 polling
   useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentSolar((prev) => simulateCurrentSolar(prev));
-      setCurrentConsumption((prev) => simulateCurrentConsumption(prev));
-    }, 3000);
-    return () => clearInterval(interval);
-  }, []);
+    if (!liveMode) {
+      const interval = setInterval(() => {
+        setCurrentSolar((prev) => simulateCurrentSolar(prev));
+        setCurrentConsumption((prev) => simulateCurrentConsumption(prev));
+      }, 3000);
+      return () => clearInterval(interval);
+    } else {
+      let active = true;
+      const poll = async () => {
+        try {
+          const d = await fetchEsp32Data(getEsp32Url());
+          if (active) {
+            setCurrentSolar(d.solar_w);
+            setCurrentConsumption(d.consumption_w);
+            setLiveError(null);
+          }
+        } catch (err) {
+          if (active) setLiveError(err instanceof Error ? err.message : 'ESP32 nicht erreichbar');
+        }
+      };
+      poll();
+      const interval = setInterval(poll, 5000);
+      return () => { active = false; clearInterval(interval); };
+    }
+  }, [liveMode]);
 
   const gridExchange = currentSolar - currentConsumption;
   const isFeedingGrid = gridExchange > 0;
@@ -228,7 +252,14 @@ export default function Dashboard({ thresholds, addNotification }: DashboardProp
           <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-500 flex items-center justify-center mb-2">
             <Sun size={22} />
           </div>
-          <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Erzeugung</span>
+          <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1">
+            Erzeugung
+            {liveMode && (
+              <span className="text-[8px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-900/40 px-1.5 py-0.5 rounded-full ml-1">
+                LIVE
+              </span>
+            )}
+          </span>
           <span className="text-2xl font-light">
             {Math.round(currentSolar)}
             <span className="text-sm text-slate-400 ml-1">W</span>
@@ -251,6 +282,25 @@ export default function Dashboard({ thresholds, addNotification }: DashboardProp
           </span>
         </motion.div>
       </div>
+
+      {/* Live mode error banner */}
+      <AnimatePresence>
+        {liveMode && liveError && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-2xl p-3 flex items-start gap-2 overflow-hidden"
+          >
+            <AlertTriangle size={14} className="text-amber-500 mt-0.5 shrink-0" />
+            <div>
+              <p className="text-xs font-bold text-amber-700 dark:text-amber-300">ESP32 nicht erreichbar</p>
+              <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">{liveError}</p>
+              <p className="text-[10px] text-slate-400 mt-1">Wechsle im Hardware-Tab zurück zu Simulation oder überprüfe die Verbindung.</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Grid Status */}
       <motion.div
