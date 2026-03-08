@@ -1,0 +1,5 @@
+{
+  "name": "Balkonkraftwerk Energiemonitor",
+  "description": "Energiemonitor und Bauanleitung für ein Balkonkraftwerk mit ESP32 und IR-Lesekopf.",
+  "requestFramePermissions": []
+}
