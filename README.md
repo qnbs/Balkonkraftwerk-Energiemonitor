@@ -28,6 +28,7 @@ Ein vollständig offline-fähiges Progressive Web App zur Überwachung, Analyse 
 | 📤 **ESP32 MQTT-Modus (v3)** | ESP32 publiziert retained auf `bkw/energy/#`, PubSubClient |
 | 🔋 **Batteriespeicher** | Optionales SOC-Tracking (Simulation oder ESP32/HA/MQTT) |
 | 🤖 **Gemini KI-Analyse** | BYOK — dein Key, direkt zur Google API, verschlüsselt in IndexedDB |
+| 🔐 **DB-Verschlüsselung** | Gesamte IndexedDB AES-GCM 256-bit verschlüsselt — PIN-basiert, Web Crypto API |
 | 🌤 **7-Tage-Prognose** | Open-Meteo Wetter → KI-Energieprognose mit Chart-Overlay |
 | 🌍 **i18n (de / en)** | Vollständige deutsche & englische Übersetzungen, RTL-vorbereitet |
 | 🌙 **Dark Mode** | System-aware + manuelle Umschaltung |
@@ -216,7 +217,7 @@ src/
     ├── esp32.ts          # ESP32 HTTP-Polling
     ├── electricity.ts    # aWATTar EPEX Spot Preise
     ├── push.ts           # Web Push Alerts + Cooldown-Management
-    ├── db.ts             # Dexie.js IndexedDB — Stores, Migration, Crypto-Helper
+    ├── db.ts             # Dexie.js IndexedDB — Stores, AES-GCM DB-Verschlüsselung, PBKDF2, Migration
     ├── deviceStore.ts    # Multi-Anlagen-Verwaltung (via IndexedDB)
     └── theme.ts          # Dark/Light Theme
 ```
@@ -243,17 +244,38 @@ GitHub Actions deployt automatisch bei jedem Push auf `main` → GitHub Pages.
 
 ---
 
+## � End-to-End Datenbank-Verschlüsselung
+
+Die gesamte IndexedDB (alle Stores: `settings`, `energyReadings`, `devices`, `reports`) wird **transparent mit AES-GCM 256-bit** verschlüsselt:
+
+| Schritt | Mechanismus |
+|---|---|
+| PIN-Eingabe (6-stellig) | Nur im Memory, nie persistiert |
+| Key-Ableitung | PBKDF2 (SHA-256, 100 000 Iterationen) aus PIN + Salt |
+| DB-Encryption-Key | Zufälliger AES-256-Key, via PBKDF2-Key verschlüsselt gespeichert |
+| PIN-Verifizierung | SHA-256-Hash des PINs gespeichert (kein Klartext-PIN) |
+| Datenverschlüsselung | Jeder Datensatz einzeln mit AES-GCM + zufälligem IV |
+| App-Start | PIN-Modal → Entschlüsselung → normaler Betrieb |
+| PIN vergessen | Alles löschen + Neustart (unwiderruflich!) |
+
+**Settings → Datenschutz & Verschlüsselung:**
+- „Daten verschlüsseln“ Toggle zum Aktivieren
+- PIN einrichten, ändern oder zurücksetzen
+- Warnung: „Ohne PIN sind alle Daten (inkl. Gemini-Key) unwiderruflich verloren!“
+
+---
+
 ## 🔑 Gemini KI (BYOK) — Sichere Schlüsselverwaltung
 
 1. Kostenlosen Key holen: https://aistudio.google.com/apikey
 2. **Settings → Gemini KI** öffnen → Key ins Passwort-Feld eintragen
-3. Optional: **6-stelligen PIN** vergeben → Key wird mit **AES-GCM (Web Crypto API)** verschlüsselt
-4. Key wird ausschließlich in **IndexedDB** gespeichert — nie in `localStorage`, nie in einer `.env`-Datei
+3. Optional (empfohlen): **DB-Verschlüsselung mit PIN** aktivieren → Key wird doppelt geschützt
+4. Key wird ausschließlich in **IndexedDB** gespeichert — nie in `localStorage`, nie in `.env`
 5. Key erscheint **nie im Klartext** in DevTools oder der Browserkonsole
-6. **Empfehlung:** Im Google AI Studio den Key auf den Referrer `*.github.io/*` beschränken
+6. **Empfehlung:** Im Google AI Studio den Key auf Referrer `*.github.io/*` beschränken
 7. **KI-Analyse** oder **24h / 7-Tage** im Dashboard klicken
 
-> **Hinweis:** Ohne PIN wird der Key unverschlüsselt (aber isoliert in IndexedDB) gespeichert. Mit PIN ist er AES-GCM-verschlüsselt und nur nach PIN-Eingabe nutzbar.
+> **Tipp:** Mit aktiver DB-Verschlüsselung sind alle Daten durch zwei unabhängige Schutzschichten geschützt: Origin-Isolation des Browsers + AES-GCM.
 
 ---
 
@@ -287,7 +309,10 @@ IndexedDB wird in Unit-Tests per **`fake-indexeddb`** gemockt — keine echte DB
 - [x] **24-h Preis-Chart** im Dashboard
 - [x] Gemini KI Analyse & 7-Tage-Prognose (BYOK, 30 min Cache)
 - [x] **IndexedDB via Dexie.js** — vollständige Migration von localStorage
-- [x] **AES-GCM Verschlüsselung** für Gemini API Key (Web Crypto API, optionaler PIN)
+- [x] **End-to-End DB-Verschlüsselung** — alle Stores AES-GCM 256-bit (Web Crypto, PIN-basiert)
+- [x] **PBKDF2 Key-Derivation** (100 000 Iterationen, SHA-256) — brute-force-resistent
+- [x] **PIN-Modal beim App-Start** — Unlock, PIN vergessen → sicheres Löschen
+- [x] **AES-GCM Verschlüsselung** für Gemini API Key (zusätzliche Schutzschicht)
 - [x] **Automatische localStorage → IndexedDB Migration** beim ersten Start
 - [x] **Offline-Detektor** (navigator.onLine + Events) mit Demo-Modus-Fallback
 - [x] **Background Sync** (Workbox) vorbereitet
@@ -317,7 +342,7 @@ IndexedDB wird in Unit-Tests per **`fake-indexeddb`** gemockt — keine echte DB
 | Wetter | Open-Meteo (kostenlos, kein API-Key) |
 | Strompreise | aWATTar Germany EPEX Spot API (kostenlos, kein Key) |
 | Datenbank | Dexie.js 4 (IndexedDB) |
-| Verschlüsselung | Web Crypto API (AES-GCM 256-bit) |
+| Verschlüsselung | Web Crypto API — AES-GCM 256-bit + PBKDF2 (DB-weit) |
 | Toasts | sonner v2 |
 | QR Codes | qrcode.react v4 |
 | SW | workbox-precaching + workbox-routing + workbox-strategies |

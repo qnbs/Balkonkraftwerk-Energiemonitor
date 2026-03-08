@@ -16,6 +16,7 @@ import { fetchElectricityPrices, type MarketPrice } from './lib/electricity';
 import {
   migrateFromLocalStorage, getSetting, saveSetting,
   getApiKey, hasApiKeyStored, isApiKeyEncrypted, setKeyInCache, db,
+  getDbEncryptionStatus, unlockDb, resetDbAndDeleteAll,
 } from './lib/db';
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
@@ -71,10 +72,13 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [swipeDirection, setSwipeDirection] = useState<1 | -1>(1);
   const [dbReady, setDbReady] = useState(false);
-  // PIN unlock modal for encrypted Gemini API key
+  // PIN unlock modal (handles both DB encryption and encrypted Gemini key)
   const [showPinModal, setShowPinModal] = useState(false);
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState('');
+  const [pinModalMode, setPinModalMode] = useState<'db' | 'gemini' | 'both'>('gemini');
+  const [showForgotPin, setShowForgotPin] = useState(false);
+  const [forgotPinConfirm, setForgotPinConfirm] = useState(false);
 
   // Live electricity prices (aWATTar Germany)
   const [electricityPrices, setElectricityPrices] = useState<MarketPrice[]>([]);
@@ -148,6 +152,10 @@ export default function App() {
   useEffect(() => {
     migrateFromLocalStorage()
       .then(async () => {
+        // ── Check DB encryption FIRST – if enabled, show PIN modal before
+        // reading encrypted settings (settings would return defaults while locked)
+        const { enabled: dbEncEnabled } = await getDbEncryptionStatus();
+
         const [lm, hasBat, batCap, activeDevice, savedThresholds, cachedPrices] = await Promise.all([
           isLiveMode(),
           getSetting<boolean>('has-battery', false),
@@ -166,15 +174,21 @@ export default function App() {
         // Ensure at least the default device exists
         await loadDevices();
 
-        // Handle encrypted Gemini API key: show PIN dialog if needed
+        // ── Determine what the PIN modal needs to unlock ──────────────────
         const hasKey = await hasApiKeyStored();
-        if (hasKey) {
-          const encrypted = await isApiKeyEncrypted();
-          if (encrypted) {
-            setShowPinModal(true);
-          } else {
-            await getApiKey(); // warms _keyCache
-          }
+        const geminiEncrypted = hasKey && (await isApiKeyEncrypted());
+
+        if (dbEncEnabled && geminiEncrypted) {
+          setPinModalMode('both');
+          setShowPinModal(true);
+        } else if (dbEncEnabled) {
+          setPinModalMode('db');
+          setShowPinModal(true);
+        } else if (geminiEncrypted) {
+          setPinModalMode('gemini');
+          setShowPinModal(true);
+        } else if (hasKey) {
+          await getApiKey(); // warms _keyCache for unencrypted key
         }
 
         setDbReady(true);
@@ -246,15 +260,42 @@ export default function App() {
 
   const handlePinSubmit = async () => {
     try {
-      const key = await getApiKey(pinInput);
-      setKeyInCache(key);
+      // Unlock DB encryption if needed
+      if (pinModalMode === 'db' || pinModalMode === 'both') {
+        await unlockDb(pinInput);
+        // After DB unlock, reload settings that were encrypted
+        const [lm, hasBat, batCap, activeDevice, savedThresholds] = await Promise.all([
+          isLiveMode(),
+          getSetting<boolean>('has-battery', false),
+          getSetting<number>('battery-capacity', 5),
+          getSetting<string>('active-device', 'default'),
+          getSetting<Thresholds | null>('thresholds', null),
+        ]);
+        setLiveModeState(lm);
+        setHasBattery(hasBat);
+        setBatteryCapacity(batCap);
+        setActiveDeviceId(activeDevice);
+        if (savedThresholds) setThresholds(savedThresholds);
+      }
+      // Unlock Gemini key if needed
+      if (pinModalMode === 'gemini' || pinModalMode === 'both') {
+        const key = await getApiKey(pinInput);
+        setKeyInCache(key);
+      }
       setShowPinModal(false);
       setPinInput('');
       setPinError('');
-      toast.success('API-Key entsperrt – KI-Funktionen verfügbar');
+      setShowForgotPin(false);
+      setForgotPinConfirm(false);
+      const label = pinModalMode === 'both' ? 'DB + API-Key entsperrt' : pinModalMode === 'db' ? 'Datenbank entsperrt' : 'API-Key entsperrt – KI verfügbar';
+      toast.success(`🔓 ${label}`);
     } catch (err) {
       setPinError(err instanceof Error && err.message === 'INVALID_PIN' ? 'Falscher PIN' : 'Fehler beim Entschlüsseln');
     }
+  };
+
+  const handleForgotPin = async () => {
+    await resetDbAndDeleteAll(); // reloads page
   };
 
   const toggleTheme = useCallback(() => {
@@ -336,14 +377,14 @@ export default function App() {
         {/* Offline Banner */}
         {!isOnline && <OfflineBanner />}
 
-        {/* PIN Unlock Modal for encrypted Gemini API key */}
+        {/* PIN Unlock Modal – handles DB encryption and/or Gemini key */}
         <AnimatePresence>
           {showPinModal && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
             >
               <motion.div
                 initial={{ scale: 0.9, opacity: 0 }}
@@ -356,37 +397,97 @@ export default function App() {
                     <Lock size={20} className="text-violet-600 dark:text-violet-400" />
                   </div>
                   <div>
-                    <h3 className="font-bold text-sm">API-Key entsperren</h3>
-                    <p className="text-xs text-slate-500">Dein Gemini-Key ist PIN-geschützt</p>
+                    <h3 className="font-bold text-sm">
+                      {pinModalMode === 'db' ? 'Datenbank entsperren' : pinModalMode === 'both' ? 'App entsperren' : 'API-Key entsperren'}
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      {pinModalMode === 'db' && 'Alle Daten sind AES-256-GCM verschlüsselt'}
+                      {pinModalMode === 'both' && 'DB + Gemini Key sind PIN-geschützt'}
+                      {pinModalMode === 'gemini' && 'Dein Gemini-Key ist PIN-geschützt'}
+                    </p>
                   </div>
                 </div>
-                <input
-                  autoFocus
-                  type="password"
-                  inputMode="numeric"
-                  maxLength={8}
-                  value={pinInput}
-                  onChange={(e) => { setPinInput(e.target.value); setPinError(''); }}
-                  onKeyDown={(e) => e.key === 'Enter' && handlePinSubmit()}
-                  placeholder="PIN eingeben"
-                  className="w-full px-3 py-2.5 text-sm border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500 mb-3"
-                />
-                {pinError && <p className="text-xs text-rose-500 mb-3">{pinError}</p>}
-                <div className="flex gap-2">
-                  <button
-                    onClick={handlePinSubmit}
-                    disabled={!pinInput}
-                    className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-all"
-                  >
-                    Entsperren
-                  </button>
-                  <button
-                    onClick={() => { setShowPinModal(false); setPinInput(''); setPinError(''); }}
-                    className="px-4 py-2.5 rounded-xl text-sm text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
-                  >
-                    Überspringen
-                  </button>
-                </div>
+
+                {!showForgotPin ? (
+                  <>
+                    <input
+                      autoFocus
+                      type="password"
+                      inputMode="numeric"
+                      maxLength={8}
+                      value={pinInput}
+                      onChange={(e) => { setPinInput(e.target.value); setPinError(''); }}
+                      onKeyDown={(e) => e.key === 'Enter' && handlePinSubmit()}
+                      placeholder="PIN eingeben"
+                      className="w-full px-3 py-2.5 text-sm border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500 mb-3"
+                    />
+                    {pinError && <p className="text-xs text-rose-500 mb-3">{pinError}</p>}
+                    <div className="flex gap-2 mb-3">
+                      <button
+                        onClick={handlePinSubmit}
+                        disabled={!pinInput}
+                        className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-all"
+                      >
+                        Entsperren
+                      </button>
+                      <button
+                        onClick={() => { setShowPinModal(false); setPinInput(''); setPinError(''); }}
+                        className="px-4 py-2.5 rounded-xl text-sm text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+                      >
+                        Überspringen
+                      </button>
+                    </div>
+                    {/* Forgot PIN link */}
+                    <button
+                      onClick={() => setShowForgotPin(true)}
+                      className="w-full text-xs text-rose-400 hover:text-rose-600 transition-colors text-center py-1"
+                    >
+                      PIN vergessen?
+                    </button>
+                  </>
+                ) : (
+                  /* Forgot PIN – reset confirmation */
+                  <div className="space-y-3">
+                    <div className="bg-rose-50 dark:bg-rose-950 border border-rose-200 dark:border-rose-800 rounded-xl p-3">
+                      <p className="text-xs font-bold text-rose-700 dark:text-rose-300 mb-1">⚠️ UNWIDERRUFLICH!</p>
+                      <p className="text-xs text-rose-600 dark:text-rose-400 leading-relaxed">
+                        Alle gespeicherten Daten (Messwerte, Einstellungen, Geräte, Berichte und API-Key) werden <strong>permanent gelöscht</strong>. Die App beginnt von vorne.
+                      </p>
+                    </div>
+                    {!forgotPinConfirm ? (
+                      <>
+                        <button
+                          onClick={() => setForgotPinConfirm(true)}
+                          className="w-full py-2.5 rounded-xl text-sm font-bold bg-rose-600 text-white hover:bg-rose-700 transition-all"
+                        >
+                          Alles löschen – ich verstehe
+                        </button>
+                        <button
+                          onClick={() => setShowForgotPin(false)}
+                          className="w-full py-2 rounded-xl text-xs text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+                        >
+                          Zurück
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-xs text-center font-semibold text-rose-600">Letzte Chance – wirklich alles löschen?</p>
+                        <button
+                          onClick={handleForgotPin}
+                          className="w-full py-2.5 rounded-xl text-sm font-bold bg-rose-700 text-white hover:bg-rose-800 transition-all"
+                        >
+                          ✓ Ja, alles löschen und neu starten
+                        </button>
+                        <button
+                          onClick={() => { setShowForgotPin(false); setForgotPinConfirm(false); }}
+                          className="w-full py-2 rounded-xl text-xs text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+                        >
+                          Abbrechen
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
               </motion.div>
             </motion.div>
           )}

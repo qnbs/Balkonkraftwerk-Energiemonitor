@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Save, AlertTriangle, Zap, BellRing, Key, Moon, Sun, Shield, ExternalLink, Globe, Battery, Home, Bell, PlugZap, TestTube2, Wifi, WifiOff, Share2, Trash2, Lock, LockOpen, Eye, EyeOff } from 'lucide-react';
+import { Save, AlertTriangle, Zap, BellRing, Key, Moon, Sun, Shield, ExternalLink, Globe, Battery, Home, Bell, PlugZap, TestTube2, Wifi, WifiOff, Share2, Trash2, Lock, LockOpen, Database, RefreshCw, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import type { Thresholds } from '../App';
@@ -12,6 +12,8 @@ import { getAlertPrefs, saveAlertPrefs, showBrowserNotification, type AlertPrefe
 import {
   saveApiKey, deleteApiKey, hasApiKeyStored, isApiKeyEncrypted,
   getApiKey, setKeyInCache, clearKeyCache, verifyPin,
+  getDbEncryptionStatus, enableDbEncryption, disableDbEncryption,
+  changeDbPin, resetDbAndDeleteAll,
 } from '../lib/db';
 
 interface SettingsProps {
@@ -51,6 +53,19 @@ export default function Settings({
   const [showSecurityModal, setShowSecurityModal] = useState(false);
   const [keySaving, setKeySaving] = useState(false);
 
+  // DB Encryption state
+  const [dbEncEnabled, setDbEncEnabled] = useState(false);
+  const [dbEncUnlocked, setDbEncUnlocked] = useState(true);
+  const [dbEncPin, setDbEncPin] = useState('');
+  const [dbEncPinConfirm, setDbEncPinConfirm] = useState('');
+  const [dbEncOldPin, setDbEncOldPin] = useState('');
+  const [dbEncNewPin, setDbEncNewPin] = useState('');
+  const [dbEncNewPinConfirm, setDbEncNewPinConfirm] = useState('');
+  const [dbEncBusy, setDbEncBusy] = useState(false);
+  const [showChangePinForm, setShowChangePinForm] = useState(false);
+  const [showDisableForm, setShowDisableForm] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+
   const [haConfig, setHaConfig] = useState<HAConfig>({ url: '', token: '', entitySolar: '', entityLoad: '', entityBattery: '' });
   const [mqttConfig, setMqttConfig] = useState<MQTTConfig>({ brokerUrl: '', username: '', password: '', topicSolar: '', topicLoad: '', topicBattery: '', topicGrid: '' });
   const [notifPerm, setNotifPerm] = useState<NotificationPermission>(() =>
@@ -65,6 +80,10 @@ export default function Settings({
     getStoredHAConfig().then(setHaConfig);
     getStoredMQTTConfig().then(setMqttConfig);
     getAlertPrefs().then(setAlertPrefs);
+    getDbEncryptionStatus().then(({ enabled, unlocked }) => {
+      setDbEncEnabled(enabled);
+      setDbEncUnlocked(unlocked);
+    });
   }, []);
 
   useEffect(() => { setLocalThresholds(thresholds); }, [thresholds]);
@@ -142,6 +161,65 @@ export default function Settings({
   const handleSaveAlerts = async () => {
     await saveAlertPrefs(alertPrefs);
     toast.success('Alarm-Einstellungen gespeichert');
+  };
+
+  // ── DB Encryption handlers ──────────────────────────────────────────────
+
+  const handleEnableDbEncryption = async () => {
+    if (dbEncPin.length < 4) { toast.error('PIN muss mindestens 4 Stellen haben'); return; }
+    if (dbEncPin !== dbEncPinConfirm) { toast.error('PINs stimmen nicht überein'); return; }
+    setDbEncBusy(true);
+    try {
+      await enableDbEncryption(dbEncPin);
+      setDbEncEnabled(true);
+      setDbEncUnlocked(true);
+      setDbEncPin('');
+      setDbEncPinConfirm('');
+      toast.success('🔐 Alle Daten sind jetzt AES-256-GCM verschlüsselt');
+    } catch (err) {
+      toast.error('Fehler beim Verschlüsseln', { description: String(err) });
+    } finally {
+      setDbEncBusy(false);
+    }
+  };
+
+  const handleDisableDbEncryption = async () => {
+    if (!dbEncOldPin) { toast.error('PIN eingeben'); return; }
+    setDbEncBusy(true);
+    try {
+      await disableDbEncryption(dbEncOldPin);
+      setDbEncEnabled(false);
+      setDbEncUnlocked(true);
+      setDbEncOldPin('');
+      setShowDisableForm(false);
+      toast.success('Verschlüsselung deaktiviert – Daten sind wieder im Klartext');
+    } catch (err) {
+      toast.error(err instanceof Error && err.message === 'INVALID_PIN' ? 'Falscher PIN' : 'Fehler', { description: String(err) });
+    } finally {
+      setDbEncBusy(false);
+    }
+  };
+
+  const handleChangeDbPin = async () => {
+    if (dbEncNewPin.length < 4) { toast.error('Neuer PIN muss mind. 4 Stellen haben'); return; }
+    if (dbEncNewPin !== dbEncNewPinConfirm) { toast.error('Neue PINs stimmen nicht überein'); return; }
+    setDbEncBusy(true);
+    try {
+      await changeDbPin(dbEncOldPin, dbEncNewPin);
+      setDbEncOldPin('');
+      setDbEncNewPin('');
+      setDbEncNewPinConfirm('');
+      setShowChangePinForm(false);
+      toast.success('PIN erfolgreich geändert');
+    } catch (err) {
+      toast.error(err instanceof Error && err.message === 'INVALID_PIN' ? 'Falscher alter PIN' : 'Fehler', { description: String(err) });
+    } finally {
+      setDbEncBusy(false);
+    }
+  };
+
+  const handleResetDb = async () => {
+    await resetDbAndDeleteAll(); // reloads page
   };
 
   const handleTestNotification = async () => {
@@ -646,6 +724,180 @@ export default function Settings({
             </div>
           )}
         </div>
+      </div>
+
+      {/* DB Encryption */}
+      <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 shadow-sm border border-slate-100 dark:border-slate-800">
+        <h2 className="text-base font-bold mb-3 flex items-center gap-2">
+          <Database size={18} className="text-slate-500" />
+          Daten-Verschlüsselung
+          {dbEncEnabled && (
+            <span className={`ml-auto text-xs font-normal ${dbEncUnlocked ? 'text-emerald-600' : 'text-amber-500'}`}>
+              {dbEncUnlocked ? '🔓 Entsperrt' : '🔐 Gesperrt'}
+            </span>
+          )}
+        </h2>
+
+        {/* Warning box */}
+        <div className={`rounded-xl p-3 mb-4 border ${dbEncEnabled ? 'bg-violet-50 dark:bg-violet-950 border-violet-200 dark:border-violet-800' : 'bg-amber-50 dark:bg-amber-950 border-amber-200 dark:border-amber-800'}`}>
+          <div className="flex gap-2 items-start">
+            {dbEncEnabled ? <ShieldCheck size={15} className="text-violet-600 mt-0.5 flex-shrink-0" /> : <AlertTriangle size={15} className="text-amber-600 mt-0.5 flex-shrink-0" />}
+            <p className={`text-xs leading-relaxed ${dbEncEnabled ? 'text-violet-700 dark:text-violet-300' : 'text-amber-700 dark:text-amber-300'}`}>
+              {dbEncEnabled
+                ? '🔐 Alle Messdaten, Einstellungen, Geräte und Reports sind mit AES-256-GCM verschlüsselt. Der Schlüssel verlässt deinen Browser nie.'
+                : '⚠️ Ohne Verschlüsselung sind alle gespeicherten Daten (inkl. Gemini API-Key) für jeden mit Zugriff auf dieses Gerät lesbar. Aktiviere die Verschlüsselung mit einem persönlichen PIN.'}
+            </p>
+          </div>
+        </div>
+
+        {!dbEncEnabled ? (
+          /* ── Enable encryption ── */
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">PIN (mind. 4 Stellen)</label>
+              <input
+                type="password"
+                inputMode="numeric"
+                maxLength={8}
+                value={dbEncPin}
+                onChange={(e) => setDbEncPin(e.target.value)}
+                placeholder="PIN festlegen"
+                className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">PIN bestätigen</label>
+              <input
+                type="password"
+                inputMode="numeric"
+                maxLength={8}
+                value={dbEncPinConfirm}
+                onChange={(e) => setDbEncPinConfirm(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleEnableDbEncryption()}
+                placeholder="PIN wiederholen"
+                className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+            </div>
+            {dbEncPin && dbEncPinConfirm && dbEncPin !== dbEncPinConfirm && (
+              <p className="text-xs text-rose-500">PINs stimmen nicht überein</p>
+            )}
+            <button
+              onClick={handleEnableDbEncryption}
+              disabled={dbEncPin.length < 4 || dbEncPin !== dbEncPinConfirm || dbEncBusy}
+              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-all"
+            >
+              <Lock size={14} />
+              {dbEncBusy ? 'Verschlüssele alle Daten…' : 'Verschlüsselung aktivieren'}
+            </button>
+            <p className="text-[10px] text-slate-400 text-center">
+              ⚠ Ohne PIN sind alle Daten (inkl. Gemini-Key) unwiderruflich verloren, falls der PIN vergessen wird!
+            </p>
+          </div>
+        ) : (
+          /* ── Encryption is ON ── */
+          <div className="space-y-3">
+            <div className="flex items-center gap-2.5 p-3 rounded-xl bg-violet-50 dark:bg-violet-950 border border-violet-200 dark:border-violet-800">
+              <Lock size={16} className="text-violet-600 flex-shrink-0" />
+              <div className="flex-1">
+                <p className="text-xs font-semibold text-violet-800 dark:text-violet-200">AES-256-GCM aktiv</p>
+                <p className="text-[10px] text-violet-600 dark:text-violet-400 mt-0.5">Alle Stores verschlüsselt · PBKDF2 Key Derivation · PIN-Hash gespeichert</p>
+              </div>
+            </div>
+
+            {/* Change PIN */}
+            <button
+              onClick={() => { setShowChangePinForm(!showChangePinForm); setShowDisableForm(false); }}
+              className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
+            >
+              <RefreshCw size={13} /> PIN ändern
+            </button>
+
+            <AnimatePresence>
+              {showChangePinForm && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="overflow-hidden space-y-2 pt-1"
+                >
+                  <input type="password" inputMode="numeric" maxLength={8} value={dbEncOldPin} onChange={(e) => setDbEncOldPin(e.target.value)} placeholder="Aktueller PIN" className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                  <input type="password" inputMode="numeric" maxLength={8} value={dbEncNewPin} onChange={(e) => setDbEncNewPin(e.target.value)} placeholder="Neuer PIN (mind. 4 Stellen)" className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                  <input type="password" inputMode="numeric" maxLength={8} value={dbEncNewPinConfirm} onChange={(e) => setDbEncNewPinConfirm(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleChangeDbPin()} placeholder="Neuen PIN bestätigen" className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                  {dbEncNewPin && dbEncNewPinConfirm && dbEncNewPin !== dbEncNewPinConfirm && (
+                    <p className="text-xs text-rose-500">Neue PINs stimmen nicht überein</p>
+                  )}
+                  <button
+                    onClick={handleChangeDbPin}
+                    disabled={!dbEncOldPin || dbEncNewPin.length < 4 || dbEncNewPin !== dbEncNewPinConfirm || dbEncBusy}
+                    className="w-full py-2 rounded-lg text-sm font-medium bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-all"
+                  >
+                    {dbEncBusy ? 'Ändere PIN…' : 'PIN speichern'}
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Disable encryption */}
+            <button
+              onClick={() => { setShowDisableForm(!showDisableForm); setShowChangePinForm(false); }}
+              className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium border border-amber-200 dark:border-amber-800 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950 transition-all"
+            >
+              <LockOpen size={13} /> Verschlüsselung deaktivieren
+            </button>
+
+            <AnimatePresence>
+              {showDisableForm && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="overflow-hidden space-y-2 pt-1"
+                >
+                  <p className="text-xs text-amber-700 dark:text-amber-400">Alle Daten werden entschlüsselt und liegen wieder im Klartext vor.</p>
+                  <input type="password" inputMode="numeric" maxLength={8} value={dbEncOldPin} onChange={(e) => setDbEncOldPin(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleDisableDbEncryption()} placeholder="Aktuellen PIN eingeben" className="w-full px-3 py-2 text-sm border border-amber-200 dark:border-amber-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                  <button
+                    onClick={handleDisableDbEncryption}
+                    disabled={!dbEncOldPin || dbEncBusy}
+                    className="w-full py-2 rounded-lg text-sm font-medium bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 transition-all"
+                  >
+                    {dbEncBusy ? 'Entschlüssele…' : 'Deaktivieren bestätigen'}
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Forgot PIN / Reset */}
+            <div className="border-t border-slate-100 dark:border-slate-800 pt-3">
+              {!showResetConfirm ? (
+                <button
+                  onClick={() => setShowResetConfirm(true)}
+                  className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950 transition-all"
+                >
+                  <Trash2 size={13} /> PIN vergessen → Alle Daten löschen
+                </button>
+              ) : (
+                <div className="space-y-2">
+                  <div className="bg-rose-50 dark:bg-rose-950 border border-rose-200 dark:border-rose-800 rounded-xl p-3">
+                    <p className="text-xs font-bold text-rose-700 dark:text-rose-300 mb-1">⚠️ UNWIDERRUFLICH!</p>
+                    <p className="text-xs text-rose-600 dark:text-rose-400">Alle Messdaten, Einstellungen, Geräte und Berichte werden permanent gelöscht. Diese Aktion kann nicht rückgängig gemacht werden.</p>
+                  </div>
+                  <button
+                    onClick={handleResetDb}
+                    className="w-full py-2 rounded-lg text-sm font-bold bg-rose-600 text-white hover:bg-rose-700 transition-all"
+                  >
+                    Alles löschen und neu starten
+                  </button>
+                  <button
+                    onClick={() => setShowResetConfirm(false)}
+                    className="w-full py-2 rounded-lg text-xs text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+                  >
+                    Abbrechen
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Home Assistant */}
