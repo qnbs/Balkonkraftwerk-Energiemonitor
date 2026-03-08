@@ -58,6 +58,18 @@ export interface StoredReport {
   _enc?: string;      // AES-GCM encrypted payload (excludes id, date)
 }
 
+// Sync queue – persisted locally until successfully pushed to Supabase
+export interface SyncQueueEntry {
+  id?: number;           // autoIncrement PK
+  table: 'energyReadings' | 'devices' | 'settings' | 'reports';
+  operation: 'upsert' | 'delete';
+  localId: string;       // string-cast of the local PK
+  encryptedPayload: string; // already encrypted payload (or '__DELETE__')
+  syncVersion: number;   // monotonic timestamp
+  retries: number;
+  createdAt: number;
+}
+
 // ---------------------------------------------------------------------------
 // Dexie schema
 // ---------------------------------------------------------------------------
@@ -67,6 +79,7 @@ class BalkonkraftwerkDB extends Dexie {
   devices!: Table<StoredDevice, string>;
   energyReadings!: Table<EnergyReading, number>;
   reports!: Table<StoredReport, string>;
+  syncQueue!: Table<SyncQueueEntry, number>;
 
   constructor() {
     super('BalkonkraftwerkDB');
@@ -77,13 +90,20 @@ class BalkonkraftwerkDB extends Dexie {
       energyReadings: '++id, timestamp, deviceId, [deviceId+timestamp]',
       reports:        'id, date, deviceId, type, createdAt',
     });
-    // v2: same schema, adds support for _enc field on all stores (no structural change needed).
-    // Records may now contain an optional _enc field with AES-GCM encrypted payload.
+    // v2: adds _enc support (no structural change)
     this.version(2).stores({
       settings:       'key',
       devices:        'id, name, createdAt, updatedAt',
       energyReadings: '++id, timestamp, deviceId, [deviceId+timestamp]',
       reports:        'id, date, deviceId, type, createdAt',
+    });
+    // v3: adds offline sync queue for Supabase Cloud-Sync
+    this.version(3).stores({
+      settings:       'key',
+      devices:        'id, name, createdAt, updatedAt',
+      energyReadings: '++id, timestamp, deviceId, [deviceId+timestamp]',
+      reports:        'id, date, deviceId, type, createdAt',
+      syncQueue:      '++id, table, operation, syncVersion, createdAt',
     });
   }
 }
@@ -627,6 +647,8 @@ export async function putDevice(device: StoredDevice): Promise<StoredDevice> {
   if (_dbEncEnabled && _masterKey) {
     const enc = await encryptPayload(updated);
     await db.devices.put({ id: device.id, name: '', peakPowerW: 0, installDate: '', color: '', createdAt: device.createdAt, updatedAt: updated.updatedAt, _enc: enc });
+    // Enqueue cloud sync (payload already encrypted)
+    await enqueueSyncUpsert('devices', device.id, updated);
   } else {
     await db.devices.put(updated);
   }
@@ -637,6 +659,7 @@ export async function removeDevice(id: string): Promise<StoredDevice[]> {
   const all = await db.devices.toArray();
   if (all.length <= 1) return getDevices(); // refuse to delete the last device
   await db.devices.delete(id);
+  await enqueueSyncDelete('devices', id);
   return getDevices();
 }
 
@@ -649,7 +672,9 @@ export async function addEnergyReading(reading: Omit<EnergyReading, 'id'>): Prom
     const { timestamp, deviceId } = reading;
     const payload = { solarW: reading.solarW, consumptionW: reading.consumptionW, gridW: reading.gridW, autarky: reading.autarky, savedAt: reading.savedAt };
     const enc = await encryptPayload(payload);
-    await db.energyReadings.add({ timestamp, deviceId, solarW: 0, consumptionW: 0, gridW: 0, autarky: 0, _enc: enc });
+    const newId = await db.energyReadings.add({ timestamp, deviceId, solarW: 0, consumptionW: 0, gridW: 0, autarky: 0, _enc: enc });
+    // Enqueue cloud sync
+    await enqueueSyncUpsert('energyReadings', String(newId), { ...reading, id: newId });
   } else {
     await db.energyReadings.add(reading);
   }
@@ -774,4 +799,212 @@ export async function migrateFromLocalStorage(): Promise<void> {
     localStorage.clear();
     if (theme) localStorage.setItem('bkw-theme', theme);
   } catch { /* ignore */ }
+}
+
+// ---------------------------------------------------------------------------
+// Cloud-Sync Engine (Supabase, optional)
+//
+// Design principles:
+//  • Offline-first: every write is enqueued locally FIRST, then flushed to
+//    Supabase when online & authenticated.
+//  • Encrypted: the payload pushed to Supabase is the same AES-GCM blob
+//    already stored locally (Supabase never sees plaintext).
+//  • Idempotent: upsert with `onConflict` so retries are safe.
+//  • Pull-on-login: when the user signs in on a new device the engine pulls
+//    all remote rows and merges them into the local DB (last-write-wins by
+//    `sync_version`).
+//  • Guest mode: if Supabase is not configured or the user is not signed in,
+//    every queue operation is a silent no-op – the app works 100% offline.
+// ---------------------------------------------------------------------------
+
+let _syncBusy = false;
+
+/** Add an entry to the local offline sync queue. */
+async function enqueueSyncOp(
+  table: SyncQueueEntry['table'],
+  operation: SyncQueueEntry['operation'],
+  localId: string,
+  encryptedPayload: string,
+): Promise<void> {
+  try {
+    await db.syncQueue.add({
+      table,
+      operation,
+      localId,
+      encryptedPayload,
+      syncVersion: Date.now(),
+      retries: 0,
+      createdAt: Date.now(),
+    });
+  } catch { /* non-critical – sync is best-effort */ }
+}
+
+/**
+ * Enqueue a record for cloud sync.
+ * Called automatically by write helpers when DB-level encryption is active
+ * (otherwise data would be pushed as plaintext – not allowed).
+ */
+export async function enqueueSyncUpsert(
+  table: SyncQueueEntry['table'],
+  localId: string,
+  data: unknown,
+): Promise<void> {
+  if (!_dbEncEnabled || !_masterKey) return; // never push plaintext
+  try {
+    const enc = await encryptPayload(data);
+    await enqueueSyncOp(table, 'upsert', localId, enc);
+  } catch { /* non-critical */ }
+}
+
+export async function enqueueSyncDelete(
+  table: SyncQueueEntry['table'],
+  localId: string,
+): Promise<void> {
+  await enqueueSyncOp(table, 'delete', localId, '__DELETE__');
+}
+
+/** How many items are waiting in the sync queue. */
+export async function getSyncQueueSize(): Promise<number> {
+  return db.syncQueue.count();
+}
+
+/**
+ * Flush the local sync queue to Supabase.
+ * Returns the number of successfully processed entries.
+ * Silently ignores errors per entry (max 3 retries before drop).
+ */
+export async function flushSyncQueue(): Promise<number> {
+  const { isSupabaseConfigured, getCurrentUser, upsertSyncRow, deleteSyncRow } =
+    await import('./supabase');
+
+  if (!isSupabaseConfigured() || !getCurrentUser()) return 0;
+  if (_syncBusy) return 0;
+  _syncBusy = true;
+
+  let processed = 0;
+  try {
+    const entries = await db.syncQueue.orderBy('syncVersion').limit(200).toArray();
+    for (const entry of entries) {
+      try {
+        if (entry.operation === 'delete') {
+          await deleteSyncRow(entry.localId, entry.table);
+        } else {
+          await upsertSyncRow({
+            local_id: entry.localId,
+            table_name: entry.table,
+            encrypted_payload: entry.encryptedPayload,
+            sync_version: entry.syncVersion,
+            is_deleted: false,
+          });
+        }
+        await db.syncQueue.delete(entry.id!);
+        processed++;
+      } catch {
+        const newRetries = (entry.retries ?? 0) + 1;
+        if (newRetries >= 3) {
+          await db.syncQueue.delete(entry.id!); // give up after 3 retries
+        } else {
+          await db.syncQueue.update(entry.id!, { retries: newRetries });
+        }
+      }
+    }
+  } finally {
+    _syncBusy = false;
+  }
+  return processed;
+}
+
+/**
+ * Pull all remote rows for the current user and merge into local DB.
+ * Uses last-write-wins strategy based on `sync_version`.
+ * Only runs when DB encryption is active (needed to decrypt pulled payloads).
+ */
+export async function pullFromSupabase(since = 0): Promise<number> {
+  const { isSupabaseConfigured, getCurrentUser, pullSyncRows } =
+    await import('./supabase');
+
+  if (!isSupabaseConfigured() || !getCurrentUser()) return 0;
+  if (!_dbEncEnabled || !_masterKey) return 0; // cannot decrypt without master key
+
+  let merged = 0;
+  try {
+    const rows = await pullSyncRows(since);
+    for (const row of rows) {
+      if (row.is_deleted) {
+        // soft-delete: remove from local DB
+        switch (row.table_name) {
+          case 'devices':   await db.devices.delete(row.local_id); break;
+          case 'reports':   await db.reports.delete(row.local_id); break;
+          case 'settings':  await db.settings.delete(row.local_id); break;
+          case 'energyReadings':
+            await db.energyReadings.delete(Number(row.local_id)); break;
+        }
+        merged++;
+        continue;
+      }
+
+      // Decrypt and write locally
+      try {
+        switch (row.table_name) {
+          case 'settings': {
+            const val = await decryptPayload<unknown>(row.encrypted_payload);
+            // Only overwrite if remote version is newer
+            const local = await db.settings.get(row.local_id);
+            const localVer = (local?.value as { _syncVersion?: number } | null)?._syncVersion ?? 0;
+            if (row.sync_version > localVer) {
+              await db.settings.put({ key: row.local_id, value: val });
+            }
+            break;
+          }
+          case 'devices': {
+            const val = await decryptPayload<StoredDevice>(row.encrypted_payload);
+            const local = await db.devices.get(row.local_id);
+            if (!local || row.sync_version > (local.updatedAt ?? 0)) {
+              await db.devices.put({ ...val, _enc: undefined });
+            }
+            break;
+          }
+          case 'energyReadings': {
+            const val = await decryptPayload<EnergyReading>(row.encrypted_payload);
+            const localId = Number(row.local_id);
+            const local = await db.energyReadings.get(localId);
+            if (!local) {
+              await db.energyReadings.put({ ...val, id: localId, _enc: undefined });
+            }
+            break;
+          }
+          case 'reports': {
+            const val = await decryptPayload<StoredReport>(row.encrypted_payload);
+            const local = await db.reports.get(row.local_id);
+            if (!local || row.sync_version > (local.createdAt ?? 0)) {
+              await db.reports.put({ ...val, _enc: undefined });
+            }
+            break;
+          }
+        }
+        merged++;
+      } catch { /* skip corrupted remote row */ }
+    }
+    // Remember last sync time
+    if (rows.length > 0) {
+      await db.settings.put({ key: '_last_sync_at', value: Date.now() });
+    }
+  } catch { /* non-critical */ }
+
+  return merged;
+}
+
+/** Full initial sync: pull + flush queue. */
+export async function fullSync(): Promise<{ pulled: number; pushed: number }> {
+  const lastSyncAt = await getSetting<number>('_last_sync_at', 0);
+  const [pulled, pushed] = await Promise.all([
+    pullFromSupabase(lastSyncAt),
+    flushSyncQueue(),
+  ]);
+  return { pulled, pushed };
+}
+
+/** Get last sync timestamp (0 = never synced). */
+export async function getLastSyncAt(): Promise<number> {
+  return getSetting<number>('_last_sync_at', 0);
 }

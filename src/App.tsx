@@ -17,7 +17,9 @@ import {
   migrateFromLocalStorage, getSetting, saveSetting,
   getApiKey, hasApiKeyStored, isApiKeyEncrypted, setKeyInCache, db,
   getDbEncryptionStatus, unlockDb, resetDbAndDeleteAll,
+  flushSyncQueue,
 } from './lib/db';
+import { initSupabaseAuth, subscribeToRealtimeSync, isSupabaseConfigured } from './lib/supabase';
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const Help = lazy(() => import('./components/Help'));
@@ -200,7 +202,24 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Persist battery settings to DB
+  // Supabase Auth init + Realtime subscription + online-triggered queue flush
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    initSupabaseAuth().catch(() => {});
+
+    const handleOnline = () => { flushSyncQueue().catch(() => {}); };
+    window.addEventListener('online', handleOnline);
+
+    const unsub = subscribeToRealtimeSync(
+      () => { /* realtime INSERT – useLiveQuery auto-refreshes */ },
+      () => { /* realtime UPDATE – useLiveQuery auto-refreshes */ },
+    );
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      unsub();
+    };
+  }, []);
+
   useEffect(() => {
     if (!dbReady) return;
     saveSetting('has-battery', hasBattery).catch(() => {});

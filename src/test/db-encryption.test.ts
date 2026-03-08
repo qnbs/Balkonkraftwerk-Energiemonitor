@@ -13,6 +13,7 @@ import {
   enableDbEncryption, disableDbEncryption, changeDbPin,
   getDbEncryptionStatus, isDbUnlocked, verifyDbPin,
   resetDbEncryptionState,
+  getSyncQueueSize,
   type StoredDevice,
 } from '../lib/db';
 
@@ -178,5 +179,75 @@ describe('Device CRUD with encryption', () => {
     const found = devices.find((d) => d.id === 'dev-1');
     expect(found?.name).toBe('Meine Anlage');
     expect(found?.peakPowerW).toBe(820);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sync Queue tests
+// ---------------------------------------------------------------------------
+describe('Sync queue', () => {
+  it('queue is empty initially', async () => {
+    const size = await getSyncQueueSize();
+    expect(size).toBe(0);
+  });
+
+  it('enqueueing inside putDevice (with encryption) adds to sync queue', async () => {
+    await enableDbEncryption('testpin');
+    const device: StoredDevice = {
+      id: 'sync-dev-1',
+      name: 'Sync Test Device',
+      peakPowerW: 400,
+      installDate: '2026-03-08',
+      color: '#3b82f6',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await putDevice(device);
+    // Queue should have exactly one entry (the putDevice write)
+    const size = await getSyncQueueSize();
+    expect(size).toBe(1);
+  });
+
+  it('enqueueing inside addEnergyReading (with encryption) adds to sync queue', async () => {
+    await enableDbEncryption('testpin');
+    await addEnergyReading({ timestamp: Date.now(), deviceId: 'dev1', solarW: 500, consumptionW: 300, gridW: -200, autarky: 100 });
+    const size = await getSyncQueueSize();
+    expect(size).toBe(1);
+  });
+
+  it('entries in queue have correct table and operation', async () => {
+    await enableDbEncryption('testpin');
+    const device: StoredDevice = {
+      id: 'queue-check-dev',
+      name: 'Queue Check',
+      peakPowerW: 600,
+      installDate: '2026-03-08',
+      color: '#f59e0b',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await putDevice(device);
+    const entries = await db.syncQueue.toArray();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].table).toBe('devices');
+    expect(entries[0].operation).toBe('upsert');
+    expect(entries[0].localId).toBe('queue-check-dev');
+    expect(entries[0].encryptedPayload).toContain(':'); // "iv_b64:ciphertext_b64"
+  });
+
+  it('no sync queue entries without DB encryption (plain mode)', async () => {
+    // Without encryption, enqueueSyncUpsert is a no-op (never pushes plaintext)
+    const device: StoredDevice = {
+      id: 'plain-dev',
+      name: 'Plain Device',
+      peakPowerW: 300,
+      installDate: '2026-03-08',
+      color: '#10b981',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await putDevice(device);
+    const size = await getSyncQueueSize();
+    expect(size).toBe(0);
   });
 });

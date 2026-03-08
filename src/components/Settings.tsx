@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Save, AlertTriangle, Zap, BellRing, Key, Moon, Sun, Shield, ExternalLink, Globe, Battery, Home, Bell, PlugZap, TestTube2, Wifi, WifiOff, Share2, Trash2, Lock, LockOpen, Database, RefreshCw, ShieldCheck } from 'lucide-react';
+import { Save, AlertTriangle, Zap, BellRing, Key, Moon, Sun, Shield, ExternalLink, Globe, Battery, Home, Bell, PlugZap, TestTube2, Wifi, WifiOff, Share2, Trash2, Lock, LockOpen, Database, RefreshCw, ShieldCheck, Cloud, CloudOff, LogIn, LogOut, RotateCcw, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import type { Thresholds } from '../App';
@@ -14,7 +14,12 @@ import {
   getApiKey, setKeyInCache, clearKeyCache, verifyPin,
   getDbEncryptionStatus, enableDbEncryption, disableDbEncryption,
   changeDbPin, resetDbAndDeleteAll,
+  fullSync, flushSyncQueue, getSyncQueueSize, getLastSyncAt,
 } from '../lib/db';
+import {
+  isSupabaseConfigured, subscribeToAuthState, signInWithMagicLink, signOut,
+  type AuthState,
+} from '../lib/supabase';
 
 interface SettingsProps {
   thresholds: Thresholds;
@@ -66,6 +71,17 @@ export default function Settings({
   const [showDisableForm, setShowDisableForm] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
 
+  // Cloud-Sync (Supabase) state
+  const supConfigured = isSupabaseConfigured();
+  const [authState, setAuthState] = useState<AuthState>({ user: null, session: null, loading: true });
+  const [magicLinkEmail, setMagicLinkEmail] = useState('');
+  const [magicLinkSent, setMagicLinkSent] = useState(false);
+  const [magicLinkLoading, setMagicLinkLoading] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncQueueSize, setSyncQueueSize] = useState(0);
+  const [lastSyncAt, setLastSyncAt] = useState(0);
+  const [showLoginForm, setShowLoginForm] = useState(false);
+
   const [haConfig, setHaConfig] = useState<HAConfig>({ url: '', token: '', entitySolar: '', entityLoad: '', entityBattery: '' });
   const [mqttConfig, setMqttConfig] = useState<MQTTConfig>({ brokerUrl: '', username: '', password: '', topicSolar: '', topicLoad: '', topicBattery: '', topicGrid: '' });
   const [notifPerm, setNotifPerm] = useState<NotificationPermission>(() =>
@@ -84,6 +100,11 @@ export default function Settings({
       setDbEncEnabled(enabled);
       setDbEncUnlocked(unlocked);
     });
+    // Cloud-Sync state
+    getSyncQueueSize().then(setSyncQueueSize);
+    getLastSyncAt().then(setLastSyncAt);
+    const unsubAuth = subscribeToAuthState(setAuthState);
+    return () => { unsubAuth(); };
   }, []);
 
   useEffect(() => { setLocalThresholds(thresholds); }, [thresholds]);
@@ -221,6 +242,42 @@ export default function Settings({
   const handleResetDb = async () => {
     await resetDbAndDeleteAll(); // reloads page
   };
+
+  // ── Cloud-Sync handlers ─────────────────────────────────────────────────
+
+  const handleSendMagicLink = useCallback(async () => {
+    if (!magicLinkEmail.includes('@')) { toast.error('Bitte gültige E-Mail eingeben'); return; }
+    setMagicLinkLoading(true);
+    try {
+      await signInWithMagicLink(magicLinkEmail);
+      setMagicLinkSent(true);
+      toast.success(`Magic Link gesendet an ${magicLinkEmail}`);
+    } catch (err) {
+      toast.error('Fehler beim Senden', { description: String(err) });
+    } finally {
+      setMagicLinkLoading(false);
+    }
+  }, [magicLinkEmail]);
+
+  const handleSignOut = useCallback(async () => {
+    await signOut();
+    toast.success('Abgemeldet – Daten bleiben lokal erhalten');
+  }, []);
+
+  const handleManualSync = useCallback(async () => {
+    if (!authState.user) { toast.error('Bitte zuerst anmelden'); return; }
+    setSyncBusy(true);
+    try {
+      const { pulled, pushed } = await fullSync();
+      setSyncQueueSize(await getSyncQueueSize());
+      setLastSyncAt(Date.now());
+      toast.success(`Sync abgeschlossen: ${pushed} gesendet, ${pulled} empfangen`);
+    } catch (err) {
+      toast.error('Sync fehlgeschlagen', { description: String(err) });
+    } finally {
+      setSyncBusy(false);
+    }
+  }, [authState.user]);
 
   const handleTestNotification = async () => {
     if (notifPerm !== 'granted') {
@@ -900,11 +957,156 @@ export default function Settings({
         )}
       </div>
 
+      {/* ── Cloud-Sync (Supabase) ─────────────────────────────────────────── */}
+      <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 shadow-sm border border-slate-100 dark:border-slate-800">
+        <h2 className="text-base font-bold mb-3 flex items-center gap-2">
+          {authState.user
+            ? <Cloud size={18} className="text-sky-500" />
+            : <CloudOff size={18} className="text-slate-400" />}
+          Cloud-Sync
+          <span className={`ml-auto text-xs font-normal ${authState.user ? 'text-emerald-600' : 'text-slate-400'}`}>
+            {authState.loading ? '○ Laden…' : authState.user ? '● Verbunden' : '○ Gast-Modus'}
+          </span>
+        </h2>
+
+        {!supConfigured ? (
+          /* Supabase not configured */
+          <div className="bg-slate-50 dark:bg-slate-800 rounded-xl p-4 text-xs text-slate-500 leading-relaxed space-y-2">
+            <p className="font-semibold text-slate-600 dark:text-slate-300">☁️ Cloud-Sync nicht konfiguriert</p>
+            <p>Füge <code className="bg-slate-200 dark:bg-slate-700 px-1 rounded">VITE_SUPABASE_URL</code> und <code className="bg-slate-200 dark:bg-slate-700 px-1 rounded">VITE_SUPABASE_ANON_KEY</code> zu <code className="bg-slate-200 dark:bg-slate-700 px-1 rounded">.env.local</code> hinzu und führe <code className="bg-slate-200 dark:bg-slate-700 px-1 rounded">npm run dev</code> erneut aus.</p>
+            <p>Die SQL-Migration findest du unter <code className="bg-slate-200 dark:bg-slate-700 px-1 rounded">supabase/migrations/001_bkw_sync.sql</code>.</p>
+            <p className="text-slate-400">Die App funktioniert vollständig offline ohne Cloud-Sync.</p>
+          </div>
+        ) : authState.user ? (
+          /* Logged in */
+          <div className="space-y-3">
+            <div className="bg-sky-50 dark:bg-sky-950 border border-sky-200 dark:border-sky-800 rounded-xl p-3">
+              <div className="flex items-center gap-2.5">
+                <Cloud size={15} className="text-sky-500 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-semibold text-sky-800 dark:text-sky-200 truncate">{authState.user.email}</p>
+                  <p className="text-[10px] text-sky-600 dark:text-sky-400">
+                    {lastSyncAt > 0
+                      ? `Letzter Sync: ${new Date(lastSyncAt).toLocaleString('de-DE')}`
+                      : 'Noch nicht synchronisiert'}
+                    {syncQueueSize > 0 ? ` · ${syncQueueSize} ausstehend` : ''}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Security notice – encryption required */}
+            {!dbEncEnabled && (
+              <div className="bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-xl p-3 text-xs text-amber-700 dark:text-amber-300">
+                <p className="font-semibold mb-1">⚠️ Verschlüsselung empfohlen</p>
+                <p>Aktiviere die DB-Verschlüsselung, bevor du Daten in die Cloud synchronisierst. Ohne Verschlüsselung werden Daten als Klartext gesendet.</p>
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <button
+                onClick={handleManualSync}
+                disabled={syncBusy}
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50 transition-all"
+              >
+                {syncBusy
+                  ? <><Loader2 size={14} className="animate-spin" /> Synchronisiere…</>
+                  : <><RotateCcw size={14} /> Jetzt synchronisieren</>}
+              </button>
+              <button
+                onClick={handleSignOut}
+                className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-medium border border-slate-200 dark:border-slate-700 text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
+              >
+                <LogOut size={13} /> Abmelden
+              </button>
+            </div>
+
+            <p className="text-[10px] text-slate-400 text-center leading-relaxed">
+              🔐 Nur verschlüsselte Blobs werden übertragen – Supabase sieht niemals Klartextdaten.
+              Daten bleiben lokal verfügbar, auch wenn die Cloud nicht erreichbar ist.
+            </p>
+          </div>
+        ) : (
+          /* Guest mode / not logged in */
+          <div className="space-y-3">
+            <div className="bg-slate-50 dark:bg-slate-800 rounded-xl p-3 text-xs text-slate-500 leading-relaxed">
+              <p className="font-semibold text-slate-600 dark:text-slate-300 mb-1">🖥️ Gast-Modus (lokal)</p>
+              <p>Alle Daten werden nur auf diesem Gerät gespeichert. Mit einem Konto kannst du deine Daten auf mehreren Geräten synchronisieren und automatisch sichern.</p>
+            </div>
+
+            {!showLoginForm ? (
+              <button
+                onClick={() => setShowLoginForm(true)}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium bg-sky-600 text-white hover:bg-sky-700 transition-all"
+              >
+                <LogIn size={14} /> Mit Magic Link anmelden
+              </button>
+            ) : magicLinkSent ? (
+              <div className="bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800 rounded-xl p-4 text-center">
+                <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300 mb-1">📧 E-Mail gesendet!</p>
+                <p className="text-xs text-emerald-600 dark:text-emerald-400">
+                  Öffne den Magic Link in <strong>{magicLinkEmail}</strong> auf diesem oder einem anderen Gerät.
+                </p>
+                <button
+                  onClick={() => { setMagicLinkSent(false); setMagicLinkEmail(''); setShowLoginForm(false); }}
+                  className="mt-3 text-xs text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  Schließen
+                </button>
+              </div>
+            ) : (
+              <AnimatePresence>
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="overflow-hidden space-y-2"
+                >
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                      E-Mail-Adresse
+                    </label>
+                    <input
+                      type="email"
+                      value={magicLinkEmail}
+                      onChange={(e) => setMagicLinkEmail(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSendMagicLink()}
+                      placeholder="deine@email.de"
+                      autoComplete="email"
+                      className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleSendMagicLink}
+                      disabled={magicLinkLoading || !magicLinkEmail.includes('@')}
+                      className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50 transition-all"
+                    >
+                      {magicLinkLoading
+                        ? <><Loader2 size={14} className="animate-spin" /> Sende…</>
+                        : <><LogIn size={14} /> Magic Link senden</>}
+                    </button>
+                    <button
+                      onClick={() => setShowLoginForm(false)}
+                      className="px-3 py-2.5 rounded-xl text-sm text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+                    >
+                      Abbrechen
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-400 text-center">
+                    Kein Passwort nötig. Du erhältst einen einmaligen Link per E-Mail.
+                  </p>
+                </motion.div>
+              </AnimatePresence>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Home Assistant */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 shadow-sm border border-slate-100 dark:border-slate-800">
         <h2 className="text-base font-bold mb-4 flex items-center gap-2">
-          <Home size={18} className="text-orange-500" />
-          {t('settings.haTitle')}
+          <Home size={18} className="text-orange-500" />          {t('settings.haTitle')}
           <span className={`ml-auto text-xs font-normal ${haStatusColor}`}>
             {haStatus === 'connected' ? `● ${t('settings.haConnected')}`
               : haStatus === 'connecting' ? `○ ${t('settings.haConnecting')}`

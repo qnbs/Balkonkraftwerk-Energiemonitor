@@ -29,6 +29,7 @@ Ein vollständig offline-fähiges Progressive Web App zur Überwachung, Analyse 
 | 🔋 **Batteriespeicher** | Optionales SOC-Tracking (Simulation oder ESP32/HA/MQTT) |
 | 🤖 **Gemini KI-Analyse** | BYOK — dein Key, direkt zur Google API, verschlüsselt in IndexedDB |
 | 🔐 **DB-Verschlüsselung** | Gesamte IndexedDB AES-GCM 256-bit verschlüsselt — PIN-basiert, Web Crypto API |
+| ☁️ **Cloud-Sync (Supabase)** | Optionaler Multi-Gerät-Sync — offline-first, Ende-zu-Ende-verschlüsselt, Magic Link Auth |
 | 🌤 **7-Tage-Prognose** | Open-Meteo Wetter → KI-Energieprognose mit Chart-Overlay |
 | 🌍 **i18n (de / en)** | Vollständige deutsche & englische Übersetzungen, RTL-vorbereitet |
 | 🌙 **Dark Mode** | System-aware + manuelle Umschaltung |
@@ -217,7 +218,8 @@ src/
     ├── esp32.ts          # ESP32 HTTP-Polling
     ├── electricity.ts    # aWATTar EPEX Spot Preise
     ├── push.ts           # Web Push Alerts + Cooldown-Management
-    ├── db.ts             # Dexie.js IndexedDB — Stores, AES-GCM DB-Verschlüsselung, PBKDF2, Migration
+    ├── db.ts             # Dexie.js IndexedDB — Stores, AES-GCM DB-Verschlüsselung, PBKDF2, Sync-Queue
+    ├── supabase.ts       # Supabase Client — Magic Link Auth, SyncRow CRUD, Realtime
     ├── deviceStore.ts    # Multi-Anlagen-Verwaltung (via IndexedDB)
     └── theme.ts          # Dark/Light Theme
 ```
@@ -262,6 +264,44 @@ Die gesamte IndexedDB (alle Stores: `settings`, `energyReadings`, `devices`, `re
 - „Daten verschlüsseln“ Toggle zum Aktivieren
 - PIN einrichten, ändern oder zurücksetzen
 - Warnung: „Ohne PIN sind alle Daten (inkl. Gemini-Key) unwiderruflich verloren!“
+
+---
+
+## ☁️ Cloud-Sync (Supabase) — Optional, Ende-zu-Ende-verschlüsselt
+
+Die App unterstützt optional **Supabase** als Cloud-Backend für Multi-Gerät-Synchronisation. Das Feature ist vollständig optional — die App funktioniert **100 % offline ohne Cloud**.
+
+### Funktionsweise
+
+| Aspekt | Implementierung |
+|---|---|
+| Architektur | Offline-First — Schreiben gehen immer zuerst in IndexedDB |
+| Sync-Queue | Änderungen werden in `syncQueue`-Store gepuffert, geleert bei Reconnect |
+| Verschlüsselung | Nur verschlüsselte Blobs werden zu Supabase gesendet — **nie Klartext** |
+| Auth | Magic Link (kein Passwort nötig) |
+| Konfliktauflösung | Last-Write-Wins anhand `sync_version` (Epoch-ms) |
+| Realtime | `postgres_changes`-Subscription → Änderungen kommen sofort auf allen Geräten an |
+| RLS | Supabase Row-Level-Security — jeder User sieht nur seine eigenen Daten |
+
+### Einrichtung
+
+1. **Supabase-Projekt anlegen**: https://supabase.com → New Project
+2. **SQL-Migration ausführen**: In Supabase → SQL Editor den Inhalt von `supabase/migrations/001_bkw_sync.sql` einfügen und ausführen
+3. **Env-Variablen setzen**:
+   ```bash
+   # .env.local
+   VITE_SUPABASE_URL=https://dein-projekt.supabase.co
+   VITE_SUPABASE_ANON_KEY=dein-anon-key
+   ```
+4. **App neu bauen** (`npm run build`) oder Dev-Server neu starten (`npm run dev`)
+5. In der App: **Settings → Cloud-Sync** → E-Mail-Adresse eingeben → Magic Link anfordern → Link klicken
+6. Nach dem Login: **DB-Verschlüsselung aktivieren** (Pflicht!) — ohne aktive Verschlüsselung wird kein Sync gestartet
+
+> **Sicherheitshinweis:** `VITE_SUPABASE_ANON_KEY` ist der öffentliche Anon-Key — dieser ist sicher, in Frontend-Code einzubetten. Supabase RLS stellt sicher, dass kein User auf fremde Daten zugreifen kann.
+
+### Ohne Supabase (Standard)
+
+Ohne die Env-Variablen zeigt die Cloud-Sync-Section in Settings den Hinweis „Kein Sync konfiguriert" — alle anderen Features sind vollständig verfügbar.
 
 ---
 
@@ -313,6 +353,11 @@ IndexedDB wird in Unit-Tests per **`fake-indexeddb`** gemockt — keine echte DB
 - [x] **PBKDF2 Key-Derivation** (100 000 Iterationen, SHA-256) — brute-force-resistent
 - [x] **PIN-Modal beim App-Start** — Unlock, PIN vergessen → sicheres Löschen
 - [x] **AES-GCM Verschlüsselung** für Gemini API Key (zusätzliche Schutzschicht)
+- [x] **Cloud-Sync via Supabase** (optional) — Offline-First, Ende-zu-Ende-verschlüsselt
+- [x] **Magic Link Auth** — passwordloser Login, kein Backend-Code nötig
+- [x] **Sync-Queue** — Änderungen werden gepuffert, bei Reconnect automatisch geleert
+- [x] **Multi-Gerät-Sync** — Last-Write-Wins, Realtime über postgres_changes
+- [x] **RLS (Row-Level-Security)** — Supabase isoliert User-Daten serverseitig
 - [x] **Automatische localStorage → IndexedDB Migration** beim ersten Start
 - [x] **Offline-Detektor** (navigator.onLine + Events) mit Demo-Modus-Fallback
 - [x] **Background Sync** (Workbox) vorbereitet
@@ -343,6 +388,7 @@ IndexedDB wird in Unit-Tests per **`fake-indexeddb`** gemockt — keine echte DB
 | Strompreise | aWATTar Germany EPEX Spot API (kostenlos, kein Key) |
 | Datenbank | Dexie.js 4 (IndexedDB) |
 | Verschlüsselung | Web Crypto API — AES-GCM 256-bit + PBKDF2 (DB-weit) |
+| Cloud-Sync | @supabase/supabase-js v2 (optional) |
 | Toasts | sonner v2 |
 | QR Codes | qrcode.react v4 |
 | SW | workbox-precaching + workbox-routing + workbox-strategies |
