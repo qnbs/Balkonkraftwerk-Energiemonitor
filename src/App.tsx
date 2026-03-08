@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
-import { Activity, BookOpen, Settings as SettingsIcon, Bell, X, Sun, Moon, Zap, TrendingUp, Cpu, LayoutGrid, HelpCircle } from 'lucide-react';
+import { Activity, BookOpen, Settings as SettingsIcon, Bell, X, Sun, Moon, Zap, TrendingUp, Cpu, LayoutGrid, HelpCircle, Lock } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useTransform, type PanInfo } from 'motion/react';
 import { Toaster, toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { ErrorBoundary, OfflineBanner } from './components/ui/ErrorBoundary';
 import { DashboardSkeleton } from './components/ui/Skeleton';
 import { LanguageSwitcher } from './components/ui/LanguageSwitcher';
@@ -10,8 +11,12 @@ import { getStoredTheme, setStoredTheme, type Theme } from './lib/theme';
 import { isLiveMode, setLiveMode } from './lib/esp32';
 import { HAClient, getStoredHAConfig, type HAStatus, type HAData } from './lib/ha';
 import { MQTTClient, getStoredMQTTConfig, type MQTTStatus } from './lib/mqtt';
-import { loadDevices, saveDevices, type BKWDevice } from './lib/deviceStore';
-import { fetchElectricityPrices, getElectricityCache, type MarketPrice } from './lib/electricity';
+import { loadDevices, type BKWDevice } from './lib/deviceStore';
+import { fetchElectricityPrices, type MarketPrice } from './lib/electricity';
+import {
+  migrateFromLocalStorage, getSetting, saveSetting,
+  getApiKey, hasApiKeyStored, isApiKeyEncrypted, setKeyInCache, db,
+} from './lib/db';
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const Help = lazy(() => import('./components/Help'));
@@ -54,11 +59,9 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('dashboard');
   const [showNotifications, setShowNotifications] = useState(false);
   const [theme, setTheme] = useState<Theme>(getStoredTheme);
-  const [liveMode, setLiveModeState] = useState(isLiveMode);
-  const [hasBattery, setHasBattery] = useState(() => localStorage.getItem('bkw-has-battery') === 'true');
-  const [batteryCapacity, setBatteryCapacity] = useState(
-    () => parseFloat(localStorage.getItem('bkw-battery-capacity') ?? '5'),
-  );
+  const [liveMode, setLiveModeState] = useState(false);
+  const [hasBattery, setHasBattery] = useState(false);
+  const [batteryCapacity, setBatteryCapacity] = useState(5);
   const [haStatus, setHaStatus] = useState<HAStatus>('disconnected');
   const [haData, setHaData] = useState<HAData | null>(null);
   const haClientRef = useRef<HAClient | null>(null);
@@ -67,35 +70,40 @@ export default function App() {
   const mqttClientRef = useRef<MQTTClient | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [swipeDirection, setSwipeDirection] = useState<1 | -1>(1);
+  const [dbReady, setDbReady] = useState(false);
+  // PIN unlock modal for encrypted Gemini API key
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [pinError, setPinError] = useState('');
 
   // Live electricity prices (aWATTar Germany)
-  const [electricityPrices, setElectricityPrices] = useState<MarketPrice[]>(
-    () => getElectricityCache() ?? [],
-  );
+  const [electricityPrices, setElectricityPrices] = useState<MarketPrice[]>([]);
 
-  // Multi-device state
-  const [devices, setDevices] = useState<BKWDevice[]>(loadDevices);
-  const [activeDeviceId, setActiveDeviceId] = useState<string>(
-    () => localStorage.getItem('bkw-active-device') ?? loadDevices()[0]?.id ?? 'default',
+  // Multi-device state – reactive via useLiveQuery
+  const liveDevices = useLiveQuery(
+    () => db.devices.orderBy('createdAt').toArray(),
+    [],
   );
+  const devices: BKWDevice[] = liveDevices ?? [];
+  const [activeDeviceId, setActiveDeviceId] = useState<string>('default');
 
-  const handleDevicesChange = useCallback((updated: BKWDevice[]) => {
-    saveDevices(updated);
-    setDevices(updated);
+  const handleDevicesChange = useCallback((_updated: BKWDevice[]) => {
+    // With dexie-react-hooks useLiveQuery, devices update reactively – no manual state update needed.
+    // This callback is kept for compatibility with DeviceManager's onDevicesChange prop.
   }, []);
 
   const handleActiveDeviceChange = useCallback((id: string) => {
     setActiveDeviceId(id);
-    localStorage.setItem('bkw-active-device', id);
+    saveSetting('active-device', id).catch(() => {});
   }, []);
 
-  const handleLiveModeChange = (v: boolean) => {
-    setLiveMode(v);
+  const handleLiveModeChange = useCallback((v: boolean) => {
+    setLiveMode(v).catch(() => {});
     setLiveModeState(v);
-  };
+  }, []);
 
-  const handleHaConnect = useCallback(() => {
-    const cfg = getStoredHAConfig();
+  const handleHaConnect = useCallback(async () => {
+    const cfg = await getStoredHAConfig();
     const client = new HAClient(cfg);
     client.onStatusChange = (status, error) => {
       setHaStatus(status);
@@ -115,8 +123,8 @@ export default function App() {
     setHaStatus('disconnected');
   }, []);
 
-  const handleMqttConnect = useCallback(() => {
-    const cfg = getStoredMQTTConfig();
+  const handleMqttConnect = useCallback(async () => {
+    const cfg = await getStoredMQTTConfig();
     const client = new MQTTClient(cfg);
     client.onStatusChange = (status, error) => {
       setMqttStatus(status);
@@ -136,11 +144,54 @@ export default function App() {
     setMqttStatus('disconnected');
   }, []);
 
-  // Persist battery settings
+  // DB migration + initial settings load
   useEffect(() => {
-    localStorage.setItem('bkw-has-battery', String(hasBattery));
-    localStorage.setItem('bkw-battery-capacity', String(batteryCapacity));
-  }, [hasBattery, batteryCapacity]);
+    migrateFromLocalStorage()
+      .then(async () => {
+        const [lm, hasBat, batCap, activeDevice, savedThresholds, cachedPrices] = await Promise.all([
+          isLiveMode(),
+          getSetting<boolean>('has-battery', false),
+          getSetting<number>('battery-capacity', 5),
+          getSetting<string>('active-device', 'default'),
+          getSetting<Thresholds | null>('thresholds', null),
+          getSetting<{ prices: MarketPrice[]; fetchedAt: number } | null>('electricity-prices-cache', null),
+        ]);
+        setLiveModeState(lm);
+        setHasBattery(hasBat);
+        setBatteryCapacity(batCap);
+        setActiveDeviceId(activeDevice);
+        if (savedThresholds) setThresholds(savedThresholds);
+        if (cachedPrices?.prices?.length) setElectricityPrices(cachedPrices.prices);
+
+        // Ensure at least the default device exists
+        await loadDevices();
+
+        // Handle encrypted Gemini API key: show PIN dialog if needed
+        const hasKey = await hasApiKeyStored();
+        if (hasKey) {
+          const encrypted = await isApiKeyEncrypted();
+          if (encrypted) {
+            setShowPinModal(true);
+          } else {
+            await getApiKey(); // warms _keyCache
+          }
+        }
+
+        setDbReady(true);
+      })
+      .catch((err) => {
+        console.error('[DB] Migration failed:', err);
+        setDbReady(true); // continue even on failure
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist battery settings to DB
+  useEffect(() => {
+    if (!dbReady) return;
+    saveSetting('has-battery', hasBattery).catch(() => {});
+    saveSetting('battery-capacity', batteryCapacity).catch(() => {});
+  }, [hasBattery, batteryCapacity, dbReady]);
 
   // Fetch live electricity prices (aWATTar DE) – refresh every 60 min
   useEffect(() => {
@@ -163,12 +214,9 @@ export default function App() {
   const dragX = useMotionValue(0);
   const dragOpacity = useTransform(dragX, [-200, 0, 200], [0.5, 1, 0.5]);
 
-  const [thresholds, setThresholds] = useState<Thresholds>(() => {
-    const saved = localStorage.getItem('bkw-thresholds');
-    return saved
-      ? JSON.parse(saved)
-      : { maxConsumption: 2000, minProductionDrop: 50, storageWarning: 90 };
-  });
+  const [thresholds, setThresholds] = useState<Thresholds>(
+    () => ({ maxConsumption: 2000, minProductionDrop: 50, storageWarning: 90 }),
+  );
 
   const [notifications, setNotifications] = useState<Notification[]>([
     {
@@ -181,10 +229,11 @@ export default function App() {
     },
   ]);
 
-  // Persist thresholds
+  // Persist thresholds to DB
   useEffect(() => {
-    localStorage.setItem('bkw-thresholds', JSON.stringify(thresholds));
-  }, [thresholds]);
+    if (!dbReady) return;
+    saveSetting('thresholds', thresholds).catch(() => {});
+  }, [thresholds, dbReady]);
 
   // Online/offline tracking
   useEffect(() => {
@@ -194,6 +243,19 @@ export default function App() {
     window.addEventListener('offline', goOffline);
     return () => { window.removeEventListener('online', goOnline); window.removeEventListener('offline', goOffline); };
   }, []);
+
+  const handlePinSubmit = async () => {
+    try {
+      const key = await getApiKey(pinInput);
+      setKeyInCache(key);
+      setShowPinModal(false);
+      setPinInput('');
+      setPinError('');
+      toast.success('API-Key entsperrt – KI-Funktionen verfügbar');
+    } catch (err) {
+      setPinError(err instanceof Error && err.message === 'INVALID_PIN' ? 'Falscher PIN' : 'Fehler beim Entschlüsseln');
+    }
+  };
 
   const toggleTheme = useCallback(() => {
     const next: Theme = theme === 'light' ? 'dark' : 'light';
@@ -273,6 +335,62 @@ export default function App() {
       <div className="flex flex-col h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans overflow-hidden transition-colors duration-300">
         {/* Offline Banner */}
         {!isOnline && <OfflineBanner />}
+
+        {/* PIN Unlock Modal for encrypted Gemini API key */}
+        <AnimatePresence>
+          {showPinModal && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+            >
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className="bg-white dark:bg-slate-900 rounded-2xl p-6 shadow-2xl w-full max-w-sm border border-slate-200 dark:border-slate-700"
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="bg-violet-100 dark:bg-violet-900 p-2.5 rounded-xl">
+                    <Lock size={20} className="text-violet-600 dark:text-violet-400" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-sm">API-Key entsperren</h3>
+                    <p className="text-xs text-slate-500">Dein Gemini-Key ist PIN-geschützt</p>
+                  </div>
+                </div>
+                <input
+                  autoFocus
+                  type="password"
+                  inputMode="numeric"
+                  maxLength={8}
+                  value={pinInput}
+                  onChange={(e) => { setPinInput(e.target.value); setPinError(''); }}
+                  onKeyDown={(e) => e.key === 'Enter' && handlePinSubmit()}
+                  placeholder="PIN eingeben"
+                  className="w-full px-3 py-2.5 text-sm border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500 mb-3"
+                />
+                {pinError && <p className="text-xs text-rose-500 mb-3">{pinError}</p>}
+                <div className="flex gap-2">
+                  <button
+                    onClick={handlePinSubmit}
+                    disabled={!pinInput}
+                    className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-all"
+                  >
+                    Entsperren
+                  </button>
+                  <button
+                    onClick={() => { setShowPinModal(false); setPinInput(''); setPinError(''); }}
+                    className="px-4 py-2.5 rounded-xl text-sm text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+                  >
+                    Überspringen
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Sonner Toaster */}
         <Toaster

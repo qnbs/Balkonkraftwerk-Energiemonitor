@@ -286,20 +286,20 @@ export default function DeviceManager({
   const { t } = useTranslation();
   const [showAddForm, setShowAddForm] = useState(false);
 
-  const handleAdd = (name: string, peakPowerW: number) => {
-    const newDevice = addDevice(name, peakPowerW);
+  const handleAdd = async (name: string, peakPowerW: number) => {
+    const newDevice = await addDevice(name, peakPowerW);
     onDevicesChange([...devices, newDevice]);
     onActiveDeviceChange(newDevice.id);
     setShowAddForm(false);
     toast.success(t('devices.addedToast', { name: newDevice.name }));
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (devices.length === 1) {
       toast.error(t('devices.cannotDeleteLast'));
       return;
     }
-    const updated = deleteDevice(id);
+    const updated = await deleteDevice(id);
     onDevicesChange(updated);
     if (activeDeviceId === id) {
       onActiveDeviceChange(updated[0]?.id ?? 'all');
@@ -307,13 +307,13 @@ export default function DeviceManager({
     toast.success(t('devices.deletedToast'));
   };
 
-  const handleRename = (id: string, name: string) => {
-    const updated = renameDevice(id, name);
+  const handleRename = async (id: string, name: string) => {
+    const updated = await renameDevice(id, name);
     onDevicesChange(updated);
   };
 
-  const handleColorChange = (id: string, color: string) => {
-    const updated = updateDevice(id, { color });
+  const handleColorChange = async (id: string, color: string) => {
+    const updated = await updateDevice(id, { color });
     onDevicesChange(updated);
   };
 

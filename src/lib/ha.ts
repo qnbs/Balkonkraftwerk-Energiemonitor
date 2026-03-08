@@ -1,4 +1,6 @@
-export const HA_CONFIG_KEY = 'bkw-ha-config';
+import { getSetting, saveSetting } from './db';
+
+export const HA_CONFIG_KEY = 'ha-config';
 
 export interface HAConfig {
   url: string;
@@ -30,17 +32,17 @@ export const DEFAULT_HA_CONFIG: HAConfig = {
   entityBattery: 'sensor.battery_soc',
 };
 
-export function getStoredHAConfig(): HAConfig {
+export async function getStoredHAConfig(): Promise<HAConfig> {
   try {
-    const raw = localStorage.getItem(HA_CONFIG_KEY);
-    return raw ? { ...DEFAULT_HA_CONFIG, ...JSON.parse(raw) } : { ...DEFAULT_HA_CONFIG };
+    const val = await getSetting<HAConfig | null>(HA_CONFIG_KEY, null);
+    return val ? { ...DEFAULT_HA_CONFIG, ...val } : { ...DEFAULT_HA_CONFIG };
   } catch {
     return { ...DEFAULT_HA_CONFIG };
   }
 }
 
-export function setStoredHAConfig(config: HAConfig): void {
-  localStorage.setItem(HA_CONFIG_KEY, JSON.stringify(config));
+export async function setStoredHAConfig(config: HAConfig): Promise<void> {
+  await saveSetting(HA_CONFIG_KEY, config);
 }
 
 type HAMsg = Record<string, unknown>;

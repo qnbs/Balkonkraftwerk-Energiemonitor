@@ -28,12 +28,14 @@ export function generateData(range: TimeRange): EnergyDataPoint[] {
       const eveningPeak = i >= 17 && i <= 22 ? 400 + Math.random() * 300 : 0;
       const consumption = baseLoad + morningPeak + eveningPeak;
 
+      const sR = Math.round(solar);
+      const cR = Math.round(consumption);
       data.push({
         time: `${i}:00`,
-        solar: Math.round(solar),
-        consumption: Math.round(consumption),
-        unused: Math.round(Math.max(0, solar - consumption)),
-        grid: Math.round(Math.max(0, consumption - solar)),
+        solar: sR,
+        consumption: cR,
+        unused: Math.max(0, sR - cR),
+        grid: Math.max(0, cR - sR),
       });
     }
   } else if (range === 'weekly') {
@@ -43,12 +45,14 @@ export function generateData(range: TimeRange): EnergyDataPoint[] {
       const solar = 2500 * weather + Math.random() * 1500;
       const isWeekend = i >= 5;
       const consumption = (isWeekend ? 4500 : 3500) + Math.random() * 1500;
+      const sR = Math.round(solar);
+      const cR = Math.round(consumption);
       data.push({
         time: days[i],
-        solar: Math.round(solar),
-        consumption: Math.round(consumption),
-        unused: Math.round(Math.max(0, solar - consumption)),
-        grid: Math.round(Math.max(0, consumption - solar)),
+        solar: sR,
+        consumption: cR,
+        unused: Math.max(0, sR - cR),
+        grid: Math.max(0, cR - sR),
       });
     }
   } else {
@@ -56,12 +60,14 @@ export function generateData(range: TimeRange): EnergyDataPoint[] {
       const weather = 0.4 + Math.random() * 0.6;
       const solar = 2800 * weather + Math.random() * 1800;
       const consumption = 3500 + Math.random() * 2000;
+      const sR = Math.round(solar);
+      const cR = Math.round(consumption);
       data.push({
         time: `${i}.`,
-        solar: Math.round(solar),
-        consumption: Math.round(consumption),
-        unused: Math.round(Math.max(0, solar - consumption)),
-        grid: Math.round(Math.max(0, consumption - solar)),
+        solar: sR,
+        consumption: cR,
+        unused: Math.max(0, sR - cR),
+        grid: Math.max(0, cR - sR),
       });
     }
   }

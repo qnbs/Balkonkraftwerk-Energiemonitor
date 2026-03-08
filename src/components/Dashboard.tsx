@@ -14,7 +14,7 @@ import {
 } from '../lib/simulation';
 import type { BKWDevice } from '../lib/deviceStore';
 const ReportModal = lazy(() => import('./ReportModal'));
-import { analyzeEnergyData, forecastEnergyData, hasApiKey, type ForecastInput, type DayForecast } from '../lib/gemini';
+import { analyzeEnergyData, forecastEnergyData, getStoredApiKey, type ForecastInput, type DayForecast } from '../lib/gemini';
 import { fetchWeatherForecast, getWeatherCache, weatherToSolar, WeatherRateLimitError, type WeatherForecast } from '../lib/weather';
 import { fetchEsp32Data, getEsp32Url } from '../lib/esp32';
 import type { HAData } from '../lib/ha';
@@ -23,6 +23,7 @@ import {
   PRICE_LEVEL_COLORS, PRICE_LEVEL_BG, PRICE_LEVEL_LABEL,
 } from '../lib/electricity';
 import { checkAlerts } from '../lib/push';
+import { getSetting, saveSetting } from '../lib/db';
 
 interface DashboardProps {
   thresholds: Thresholds;
@@ -44,9 +45,7 @@ const RANGES_KEYS: Array<{ key: TimeRange }> = [
 
 export default function Dashboard({ thresholds, addNotification, liveMode, hasBattery = false, batteryCapacity = 5, haData, devices, activeDeviceId, onActiveDeviceChange, electricityPrices = [] }: DashboardProps) {
   const { t } = useTranslation();
-  const [timeRange, setTimeRange] = useState<TimeRange>(() =>
-    (localStorage.getItem('bkw-timerange') as TimeRange) || 'daily',
-  );
+  const [timeRange, setTimeRange] = useState<TimeRange>('daily');
   const [data, setData] = useState<EnergyDataPoint[]>(() =>
     activeDeviceId === 'all'
       ? aggregateDevicesData(timeRange, devices.map((d) => d.id))
@@ -86,8 +85,13 @@ export default function Dashboard({ thresholds, addNotification, liveMode, hasBa
     [currentPrice],
   );
 
+  // Load timerange from DB on mount
   useEffect(() => {
-    localStorage.setItem('bkw-timerange', timeRange);
+    getSetting<TimeRange>('timerange', 'daily').then(setTimeRange);
+  }, []);
+
+  useEffect(() => {
+    saveSetting('timerange', timeRange).catch(() => {});
     setData(
       activeDeviceId === 'all'
         ? aggregateDevicesData(timeRange, devices.map((d) => d.id))
@@ -112,7 +116,8 @@ export default function Dashboard({ thresholds, addNotification, liveMode, hasBa
       let active = true;
       const poll = async () => {
         try {
-          const d = await fetchEsp32Data(getEsp32Url());
+          const url = await getEsp32Url();
+          const d = await fetchEsp32Data(url);
           if (active) {
             setCurrentSolar(d.solar_w);
             setCurrentConsumption(d.consumption_w);
@@ -200,7 +205,8 @@ export default function Dashboard({ thresholds, addNotification, liveMode, hasBa
   }, [data, weatherForecast, timeRange]);
 
   const handleAiAnalysis = useCallback(async () => {
-    if (!hasApiKey()) {
+    const apiKey = getStoredApiKey();
+    if (!apiKey) {
       setAiResponse('⚠️ Bitte gib deinen Gemini API-Key in den **Settings** ein, um die KI-Analyse zu nutzen.');
       setShowAi(true);
       return;
@@ -231,7 +237,8 @@ export default function Dashboard({ thresholds, addNotification, liveMode, hasBa
   }, [timeRange, currentSolar, currentConsumption, metrics, data]);
 
   const handleForecast = useCallback(async () => {
-    if (!hasApiKey()) {
+    const apiKey = getStoredApiKey();
+    if (!apiKey) {
       setForecastText('⚠️ Bitte Gemini API-Key in den **Settings** eingeben, um die Prognose zu nutzen.');
       setShowForecast(true);
       return;
@@ -246,8 +253,7 @@ export default function Dashboard({ thresholds, addNotification, liveMode, hasBa
       weather = await fetchWeatherForecast();
     } catch (err) {
       if (err instanceof WeatherRateLimitError) {
-        setRateLimitWarning(err.message);
-        weather = getWeatherCache();
+      weather = await getWeatherCache();
       } else {
         setForecastText(`❌ Wetter-Fehler: ${err instanceof Error ? err.message : String(err)}`);
         setForecastLoading(false);

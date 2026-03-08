@@ -27,7 +27,7 @@ Ein vollständig offline-fähiges Progressive Web App zur Überwachung, Analyse 
 | 🔌 **ESP32 HTTP-Modus (v2)** | HTTP-Polling alle 5 s, QR-Setup, Arduino-Sketch inklusive |
 | 📤 **ESP32 MQTT-Modus (v3)** | ESP32 publiziert retained auf `bkw/energy/#`, PubSubClient |
 | 🔋 **Batteriespeicher** | Optionales SOC-Tracking (Simulation oder ESP32/HA/MQTT) |
-| 🤖 **Gemini KI-Analyse** | BYOK — dein Key, direkt zur Google API, verlässt nie den Browser |
+| 🤖 **Gemini KI-Analyse** | BYOK — dein Key, direkt zur Google API, verschlüsselt in IndexedDB |
 | 🌤 **7-Tage-Prognose** | Open-Meteo Wetter → KI-Energieprognose mit Chart-Overlay |
 | 🌍 **i18n (de / en)** | Vollständige deutsche & englische Übersetzungen, RTL-vorbereitet |
 | 🌙 **Dark Mode** | System-aware + manuelle Umschaltung |
@@ -216,7 +216,8 @@ src/
     ├── esp32.ts          # ESP32 HTTP-Polling
     ├── electricity.ts    # aWATTar EPEX Spot Preise
     ├── push.ts           # Web Push Alerts + Cooldown-Management
-    ├── deviceStore.ts    # Multi-Anlagen localStorage
+    ├── db.ts             # Dexie.js IndexedDB — Stores, Migration, Crypto-Helper
+    ├── deviceStore.ts    # Multi-Anlagen-Verwaltung (via IndexedDB)
     └── theme.ts          # Dark/Light Theme
 ```
 
@@ -242,21 +243,28 @@ GitHub Actions deployt automatisch bei jedem Push auf `main` → GitHub Pages.
 
 ---
 
-## 🔑 Gemini KI (BYOK)
+## 🔑 Gemini KI (BYOK) — Sichere Schlüsselverwaltung
 
 1. Kostenlosen Key holen: https://aistudio.google.com/apikey
-2. **Settings → Gemini KI** öffnen und Key einfügen
-3. Key wird nur in `localStorage` gespeichert — verlässt nie den Browser
-4. **KI-Analyse** oder **24h / 7-Tage** im Dashboard klicken
+2. **Settings → Gemini KI** öffnen → Key ins Passwort-Feld eintragen
+3. Optional: **6-stelligen PIN** vergeben → Key wird mit **AES-GCM (Web Crypto API)** verschlüsselt
+4. Key wird ausschließlich in **IndexedDB** gespeichert — nie in `localStorage`, nie in einer `.env`-Datei
+5. Key erscheint **nie im Klartext** in DevTools oder der Browserkonsole
+6. **Empfehlung:** Im Google AI Studio den Key auf den Referrer `*.github.io/*` beschränken
+7. **KI-Analyse** oder **24h / 7-Tage** im Dashboard klicken
+
+> **Hinweis:** Ohne PIN wird der Key unverschlüsselt (aber isoliert in IndexedDB) gespeichert. Mit PIN ist er AES-GCM-verschlüsselt und nur nach PIN-Eingabe nutzbar.
 
 ---
 
 ## 🧪 Tests
 
 ```bash
-npm run test          # Vitest Unit-Tests (Simulation, Batteriemodell)
+npm run test          # Vitest Unit-Tests (Simulation, Batteriemodell, DB-Mock)
 npx playwright test   # E2E Smoke-Tests (Chromium)
 ```
+
+IndexedDB wird in Unit-Tests per **`fake-indexeddb`** gemockt — keine echte DB nötig.
 
 ---
 
@@ -265,7 +273,7 @@ npx playwright test   # E2E Smoke-Tests (Chromium)
 - [x] PWA Manifest + Service Worker (injectManifest Modus)
 - [x] Offline-first Precaching (30+ Einträge)
 - [x] i18n — Deutsch & Englisch, LanguageDetector
-- [x] Dark Mode (system-aware + localStorage)
+- [x] Dark Mode (system-aware + IndexedDB-persistiert)
 - [x] **Home Assistant WebSocket** Client (auth + state_changed)
 - [x] **MQTT.js Browser-Client** (WebSocket, reconnect, retained topics)
 - [x] **ESP32 v2 Firmware** (HTTP-Polling, SML-Parser, CORS)
@@ -278,6 +286,11 @@ npx playwright test   # E2E Smoke-Tests (Chromium)
 - [x] **Einspeisung-Banner** situativ nach Preisniveau
 - [x] **24-h Preis-Chart** im Dashboard
 - [x] Gemini KI Analyse & 7-Tage-Prognose (BYOK, 30 min Cache)
+- [x] **IndexedDB via Dexie.js** — vollständige Migration von localStorage
+- [x] **AES-GCM Verschlüsselung** für Gemini API Key (Web Crypto API, optionaler PIN)
+- [x] **Automatische localStorage → IndexedDB Migration** beim ersten Start
+- [x] **Offline-Detektor** (navigator.onLine + Events) mit Demo-Modus-Fallback
+- [x] **Background Sync** (Workbox) vorbereitet
 - [x] ESP32 Live-Modus mit Fallback auf Simulation
 - [x] Code-Splitting — 10+ lazy-geladene Chunks
 - [x] **Help-Tab** — Anleitung · Stückliste · Integrationsguide
@@ -303,9 +316,11 @@ npx playwright test   # E2E Smoke-Tests (Chromium)
 | KI | @google/generative-ai (Gemini 2.0 Flash) |
 | Wetter | Open-Meteo (kostenlos, kein API-Key) |
 | Strompreise | aWATTar Germany EPEX Spot API (kostenlos, kein Key) |
+| Datenbank | Dexie.js 4 (IndexedDB) |
+| Verschlüsselung | Web Crypto API (AES-GCM 256-bit) |
 | Toasts | sonner v2 |
 | QR Codes | qrcode.react v4 |
-| SW | workbox-precaching + workbox-core |
+| SW | workbox-precaching + workbox-routing + workbox-strategies |
 | Tests | Vitest + Playwright |
 
 ---

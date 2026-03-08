@@ -1,3 +1,5 @@
+import { getSetting, saveSetting } from './db';
+
 export interface ESP32Payload {
   solar_w: number;
   consumption_w: number;
@@ -8,25 +10,25 @@ export interface ESP32Payload {
   battery_pct?: number;
 }
 
-const LIVE_MODE_KEY = 'bkw-live-mode';
-const ESP32_URL_KEY = 'bkw-esp32-url';
+const LIVE_MODE_KEY  = 'live-mode';
+const ESP32_URL_KEY  = 'esp32-url';
 
 export const DEFAULT_ESP32_URL = 'http://192.168.4.1/energy';
 
-export function isLiveMode(): boolean {
-  return localStorage.getItem(LIVE_MODE_KEY) === 'true';
+export async function isLiveMode(): Promise<boolean> {
+  return getSetting<boolean>(LIVE_MODE_KEY, false);
 }
 
-export function setLiveMode(v: boolean): void {
-  localStorage.setItem(LIVE_MODE_KEY, String(v));
+export async function setLiveMode(v: boolean): Promise<void> {
+  await saveSetting(LIVE_MODE_KEY, v);
 }
 
-export function getEsp32Url(): string {
-  return localStorage.getItem(ESP32_URL_KEY) ?? DEFAULT_ESP32_URL;
+export async function getEsp32Url(): Promise<string> {
+  return getSetting<string>(ESP32_URL_KEY, DEFAULT_ESP32_URL);
 }
 
-export function setEsp32Url(url: string): void {
-  localStorage.setItem(ESP32_URL_KEY, url.trim());
+export async function setEsp32Url(url: string): Promise<void> {
+  await saveSetting(ESP32_URL_KEY, url.trim());
 }
 
 /** Poll the ESP32 HTTP endpoint. Throws on network error or invalid payload. */

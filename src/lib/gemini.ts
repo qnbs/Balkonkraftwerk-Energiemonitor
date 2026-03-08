@@ -1,7 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { getKeyFromCache, hasApiKeyStored, getSetting, saveSetting } from './db';
 
-const STORAGE_KEY = 'bkw-gemini-api-key';
-const FORECAST_CACHE_KEY = 'bkw-forecast-ai';
 const FORECAST_CACHE_TTL = 30 * 60 * 1000; // 30 min
 
 export interface DayForecast {
@@ -20,20 +19,14 @@ export interface ForecastInput {
   historischDurchschnittKwh: string;
 }
 
+/** Returns the decrypted key from the in-memory cache. Empty string if not loaded. */
 export function getStoredApiKey(): string {
-  return localStorage.getItem(STORAGE_KEY) ?? '';
+  return getKeyFromCache() ?? '';
 }
 
-export function setStoredApiKey(key: string): void {
-  if (key.trim()) {
-    localStorage.setItem(STORAGE_KEY, key.trim());
-  } else {
-    localStorage.removeItem(STORAGE_KEY);
-  }
-}
-
-export function hasApiKey(): boolean {
-  return getStoredApiKey().length > 0;
+/** Async check: true if a key record exists in IndexedDB (encrypted or not). */
+export async function hasApiKey(): Promise<boolean> {
+  return hasApiKeyStored();
 }
 
 export async function analyzeEnergyData(
@@ -41,7 +34,7 @@ export async function analyzeEnergyData(
 ): Promise<string> {
   const apiKey = getStoredApiKey();
   if (!apiKey) {
-    throw new Error('Kein Gemini API-Key konfiguriert. Bitte unter Settings eingeben.');
+    throw new Error('Kein Gemini API-Key konfiguriert. Bitte unter Settings → KI-Einstellungen eingeben.');
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
@@ -71,12 +64,10 @@ interface ForecastCache {
   fingerprint: string;
 }
 
-function getForecastCached(fingerprint: string): string | null {
+async function getForecastCached(fingerprint: string): Promise<string | null> {
   try {
-    const raw = localStorage.getItem(FORECAST_CACHE_KEY);
-    if (!raw) return null;
-    const c: ForecastCache = JSON.parse(raw);
-    if (c.fingerprint === fingerprint && Date.now() - c.timestamp < FORECAST_CACHE_TTL) {
+    const c = await getSetting<ForecastCache | null>('ai-forecast-cache', null);
+    if (c && c.fingerprint === fingerprint && Date.now() - c.timestamp < FORECAST_CACHE_TTL) {
       return c.result;
     }
   } catch { /* ignore */ }
@@ -84,13 +75,13 @@ function getForecastCached(fingerprint: string): string | null {
 }
 
 /** Generate 24h + 7-day Gemini forecast using live energy + Open-Meteo weather data.
- *  Results are cached 30 min in localStorage keyed to input fingerprint. */
+ *  Results are cached 30 min in IndexedDB keyed to input fingerprint. */
 export async function forecastEnergyData(input: ForecastInput): Promise<string> {
   const apiKey = getStoredApiKey();
-  if (!apiKey) throw new Error('Kein Gemini API-Key konfiguriert. Bitte unter Settings eingeben.');
+  if (!apiKey) throw new Error('Kein Gemini API-Key konfiguriert. Bitte unter Settings → KI-Einstellungen eingeben.');
 
   const fingerprint = JSON.stringify(input).slice(0, 120);
-  const cached = getForecastCached(fingerprint);
+  const cached = await getForecastCached(fingerprint);
   if (cached) return cached;
 
   const genAI = new GoogleGenerativeAI(apiKey);
@@ -127,9 +118,6 @@ Antworte mit diesen 5 Abschnitten:
   const result = await model.generateContent(prompt);
   const text = result.response.text();
 
-  localStorage.setItem(
-    FORECAST_CACHE_KEY,
-    JSON.stringify({ result: text, timestamp: Date.now(), fingerprint } satisfies ForecastCache),
-  );
+  await saveSetting('ai-forecast-cache', { result: text, timestamp: Date.now(), fingerprint } satisfies ForecastCache);
   return text;
 }

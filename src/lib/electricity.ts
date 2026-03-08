@@ -1,3 +1,5 @@
+import { getSetting, saveSetting } from './db';
+
 /**
  * Live electricity price integration via aWATTar Germany (EPEX Spot day-ahead).
  * Free API, no key required. Prices in €/MWh.
@@ -19,7 +21,7 @@ interface ElectricityCache {
   fetchedAt: number;
 }
 
-const CACHE_KEY = 'bkw-electricity-prices';
+const CACHE_KEY = 'electricity-prices-cache';
 const CACHE_TTL = 60 * 60 * 1000;  // 1 hour
 
 /**
@@ -29,22 +31,20 @@ const CACHE_TTL = 60 * 60 * 1000;  // 1 hour
  */
 export const GRID_SURCHARGE_EUR_KWH = 0.172;
 
-export function getElectricityCache(): MarketPrice[] | null {
+export async function getElectricityCache(): Promise<MarketPrice[] | null> {
   try {
-    const raw = localStorage.getItem(CACHE_KEY);
-    if (!raw) return null;
-    const cache: ElectricityCache = JSON.parse(raw);
-    if (Date.now() - cache.fetchedAt < CACHE_TTL) return cache.prices;
-  } catch { /* ignore parse errors */ }
+    const cache = await getSetting<ElectricityCache | null>(CACHE_KEY, null);
+    if (cache && Date.now() - cache.fetchedAt < CACHE_TTL) return cache.prices;
+  } catch { /* ignore */ }
   return null;
 }
 
 /**
  * Fetch hourly spot prices from aWATTar Germany (EPEX Spot day-ahead).
- * Results are cached for 1 h in localStorage → offline-capable.
+ * Results are cached for 1 h in IndexedDB → offline-capable.
  */
 export async function fetchElectricityPrices(): Promise<MarketPrice[]> {
-  const cached = getElectricityCache();
+  const cached = await getElectricityCache();
   if (cached) return cached;
 
   const now = Date.now();
@@ -68,7 +68,7 @@ export async function fetchElectricityPrices(): Promise<MarketPrice[]> {
   }));
 
   const cache: ElectricityCache = { prices, fetchedAt: now };
-  localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+  await saveSetting(CACHE_KEY, cache);
   return prices;
 }
 

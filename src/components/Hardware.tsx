@@ -316,7 +316,7 @@ void loop() {
 export default function Hardware({ liveMode, onLiveModeChange }: HardwareProps) {
   const [ssid, setSsid] = useState('');
   const [wifiPass, setWifiPass] = useState('');
-  const [urlInput, setUrlInput] = useState(() => getEsp32Url());
+  const [urlInput, setUrlInput] = useState(DEFAULT_ESP32_URL);
   const [testStatus, setTestStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle');
   const [testData, setTestData] = useState<ESP32Payload | null>(null);
   const [testError, setTestError] = useState('');
@@ -324,6 +324,11 @@ export default function Hardware({ liveMode, onLiveModeChange }: HardwareProps) 
   const [showCode, setShowCode] = useState(false);
   const [firmwareTab, setFirmwareTab] = useState<'http' | 'mqtt'>('http');
   const [mockData, setMockData] = useState({ solar: 423, cons: 310 });
+
+  // Load ESP32 URL from DB on mount
+  useEffect(() => {
+    getEsp32Url().then(setUrlInput);
+  }, []);
 
   // Mock WS ticker – only running in simulation mode
   useEffect(() => {
@@ -338,11 +343,11 @@ export default function Hardware({ liveMode, onLiveModeChange }: HardwareProps) 
   }, [liveMode]);
 
   const handleToggle = (v: boolean) => {
-    saveLiveMode(v);
+    saveLiveMode(v).catch(() => {});
     onLiveModeChange(v);
   };
 
-  const handleSaveUrl = () => saveEsp32Url(urlInput);
+  const handleSaveUrl = () => saveEsp32Url(urlInput).catch(() => {});
 
   const handleTest = async () => {
     setTestStatus('loading');

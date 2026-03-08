@@ -1,3 +1,5 @@
+import { getSetting, saveSetting } from './db';
+
 export interface WeatherHour {
   time: string;        // ISO local datetime, e.g. "2026-03-08T14:00"
   radiation: number;   // W/m² shortwave radiation
@@ -12,9 +14,9 @@ export interface WeatherForecast {
   hours: WeatherHour[];
 }
 
-const CACHE_KEY = 'bkw-weather-forecast';
-const RATE_KEY = 'bkw-weather-rate';
-const CACHE_TTL = 30 * 60 * 1000;  // 30 min
+const CACHE_KEY  = 'weather-cache';
+const RATE_KEY   = 'weather-rate';
+const CACHE_TTL  = 30 * 60 * 1000;  // 30 min
 const RATE_LIMIT_MS = 60 * 1000;   // 1 min between API calls
 
 export class WeatherRateLimitError extends Error {
@@ -26,12 +28,10 @@ export class WeatherRateLimitError extends Error {
   }
 }
 
-export function getWeatherCache(): WeatherForecast | null {
+export async function getWeatherCache(): Promise<WeatherForecast | null> {
   try {
-    const raw = localStorage.getItem(CACHE_KEY);
-    if (!raw) return null;
-    const f: WeatherForecast = JSON.parse(raw);
-    if (Date.now() - f.fetchedAt < CACHE_TTL) return f;
+    const f = await getSetting<WeatherForecast | null>(CACHE_KEY, null);
+    if (f && Date.now() - f.fetchedAt < CACHE_TTL) return f;
   } catch { /* ignore parse errors */ }
   return null;
 }
@@ -48,18 +48,18 @@ function getCoords(): Promise<{ lat: number; lon: number }> {
 }
 
 /** Fetch 7-day hourly forecast from Open-Meteo (free, no API key required).
- *  Results are cached 30 min in localStorage. Rate-limited to 1 req/min. */
+ *  Results are cached 30 min in IndexedDB. Rate-limited to 1 req/min. */
 export async function fetchWeatherForecast(): Promise<WeatherForecast> {
-  const cached = getWeatherCache();
+  const cached = await getWeatherCache();
   if (cached) return cached;
 
-  const lastCall = parseInt(localStorage.getItem(RATE_KEY) ?? '0', 10);
+  const lastCall = await getSetting<number>('weather-rate', 0);
   const elapsed = Date.now() - lastCall;
   if (lastCall > 0 && elapsed < RATE_LIMIT_MS) {
     throw new WeatherRateLimitError(Math.ceil((RATE_LIMIT_MS - elapsed) / 1000));
   }
 
-  localStorage.setItem(RATE_KEY, String(Date.now()));
+  await saveSetting(RATE_KEY, Date.now());
   const { lat, lon } = await getCoords();
 
   const url =
@@ -91,7 +91,7 @@ export async function fetchWeatherForecast(): Promise<WeatherForecast> {
   }));
 
   const forecast: WeatherForecast = { location: { lat, lon }, fetchedAt: Date.now(), hours };
-  localStorage.setItem(CACHE_KEY, JSON.stringify(forecast));
+  await saveSetting(CACHE_KEY, forecast);
   return forecast;
 }
 

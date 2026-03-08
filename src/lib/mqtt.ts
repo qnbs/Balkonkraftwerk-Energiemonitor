@@ -1,7 +1,8 @@
 import type { MqttClient } from 'mqtt';
 import type { HAData } from './ha';
+import { getSetting, saveSetting } from './db';
 
-export const MQTT_CONFIG_KEY = 'bkw-mqtt-config';
+export const MQTT_CONFIG_KEY = 'mqtt-config';
 
 export interface MQTTConfig {
   brokerUrl: string;   // ws://hostname:9001 oder wss://hostname:8884
@@ -32,17 +33,17 @@ export const DEFAULT_MQTT_CONFIG: MQTTConfig = {
   topicGrid: 'bkw/energy/grid_w',
 };
 
-export function getStoredMQTTConfig(): MQTTConfig {
+export async function getStoredMQTTConfig(): Promise<MQTTConfig> {
   try {
-    const raw = localStorage.getItem(MQTT_CONFIG_KEY);
-    return raw ? { ...DEFAULT_MQTT_CONFIG, ...JSON.parse(raw) } : { ...DEFAULT_MQTT_CONFIG };
+    const val = await getSetting<MQTTConfig | null>(MQTT_CONFIG_KEY, null);
+    return val ? { ...DEFAULT_MQTT_CONFIG, ...val } : { ...DEFAULT_MQTT_CONFIG };
   } catch {
     return { ...DEFAULT_MQTT_CONFIG };
   }
 }
 
-export function setStoredMQTTConfig(config: MQTTConfig): void {
-  localStorage.setItem(MQTT_CONFIG_KEY, JSON.stringify(config));
+export async function setStoredMQTTConfig(config: MQTTConfig): Promise<void> {
+  await saveSetting(MQTT_CONFIG_KEY, config);
 }
 
 /**

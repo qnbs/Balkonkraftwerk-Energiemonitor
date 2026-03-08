@@ -18,7 +18,7 @@ export default defineConfig({
       manifest: {
         name: 'Balkonkraftwerk Energiemonitor',
         short_name: 'BKW Monitor',
-        description: 'Energiemonitor & Bauanleitung für dein Balkonkraftwerk',
+        description: 'Energiemonitor & Bauanleitung für dein Balkonkraftwerk – Offline-First PWA mit sicherer IndexedDB-Speicherung',
         theme_color: '#059669',
         background_color: '#f8fafc',
         display: 'standalone',
@@ -32,7 +32,8 @@ export default defineConfig({
         ],
       },
       injectManifest: {
-        globPatterns: ['**/*.{js,css,html,png,svg,ico}'],
+        globPatterns: ['**/*.{js,css,html,png,svg,ico,woff2}'],
+        // Workbox runtime caching is handled in sw.ts directly (injectManifest strategy)
       },
       devOptions: {
         enabled: false,
@@ -48,9 +49,10 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
+          dexie:    ['dexie', 'dexie-react-hooks'],
           recharts: ['recharts'],
-          i18n: ['react-i18next', 'i18next', 'i18next-browser-languagedetector'],
-          vendor: ['motion', 'lucide-react', 'react-markdown'],
+          i18n:     ['react-i18next', 'i18next', 'i18next-browser-languagedetector'],
+          vendor:   ['motion', 'lucide-react', 'react-markdown'],
         },
       },
     },
@@ -59,5 +61,6 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
+    exclude: ['tests/**', 'node_modules/**'],
   },
 });

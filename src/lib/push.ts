@@ -1,3 +1,5 @@
+import { getSetting, saveSetting } from './db';
+
 /**
  * Web Push / local notification helpers for BKW Monitor.
  * Uses ServiceWorkerRegistration.showNotification so alerts work even when
@@ -18,10 +20,10 @@ export interface AlertPreferences {
   lowAutarkyThreshold: number;
 }
 
-const PREFS_KEY = 'bkw-alert-prefs';
-const COOLDOWN_KEY = 'bkw-alert-cooldowns';
+const PREFS_KEY    = 'alert-prefs';
+const COOLDOWN_KEY = 'alert-cooldowns';
 /** 30-minute cooldown per alert tag to avoid notification spam */
-const COOLDOWN_MS = 30 * 60 * 1000;
+const COOLDOWN_MS  = 30 * 60 * 1000;
 
 export const DEFAULT_ALERT_PREFS: AlertPreferences = {
   peakProduction: true,
@@ -33,38 +35,37 @@ export const DEFAULT_ALERT_PREFS: AlertPreferences = {
   lowAutarkyThreshold: 50,
 };
 
-export function getAlertPrefs(): AlertPreferences {
+export async function getAlertPrefs(): Promise<AlertPreferences> {
   try {
-    const raw = localStorage.getItem(PREFS_KEY);
-    if (raw) return { ...DEFAULT_ALERT_PREFS, ...(JSON.parse(raw) as Partial<AlertPreferences>) };
+    const val = await getSetting<AlertPreferences | null>(PREFS_KEY, null);
+    if (val) return { ...DEFAULT_ALERT_PREFS, ...val };
   } catch { /* ignore */ }
   return { ...DEFAULT_ALERT_PREFS };
 }
 
-export function saveAlertPrefs(prefs: AlertPreferences): void {
-  localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+export async function saveAlertPrefs(prefs: AlertPreferences): Promise<void> {
+  await saveSetting(PREFS_KEY, prefs);
 }
 
 // ---------------------------------------------------------------------------
-// Cooldown helpers (stored in localStorage so they survive tab reloads)
+// Cooldown helpers (stored in IndexedDB so they survive tab reloads)
 // ---------------------------------------------------------------------------
 
-function getCooldowns(): Record<string, number> {
+async function getCooldowns(): Promise<Record<string, number>> {
   try {
-    const raw = localStorage.getItem(COOLDOWN_KEY);
-    if (raw) return JSON.parse(raw) as Record<string, number>;
+    return await getSetting<Record<string, number>>(COOLDOWN_KEY, {});
   } catch { /* ignore */ }
   return {};
 }
 
-function setCooldown(tag: string): void {
-  const c = getCooldowns();
+async function setCooldown(tag: string): Promise<void> {
+  const c = await getCooldowns();
   c[tag] = Date.now();
-  localStorage.setItem(COOLDOWN_KEY, JSON.stringify(c));
+  await saveSetting(COOLDOWN_KEY, c);
 }
 
-function isCooledDown(tag: string): boolean {
-  return Date.now() - (getCooldowns()[tag] ?? 0) > COOLDOWN_MS;
+async function isCooledDown(tag: string): Promise<boolean> {
+  return Date.now() - ((await getCooldowns())[tag] ?? 0) > COOLDOWN_MS;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,7 +123,7 @@ export interface AlertCheckInput {
 export async function checkAlerts(input: AlertCheckInput): Promise<void> {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
 
-  const prefs = getAlertPrefs();
+  const prefs = await getAlertPrefs();
   const { currentSolarW, selfSufficiency, peakSolarW, spotPriceCtKwh, amortizationReached, daysToAmortization } = input;
 
   // ⚡ Peak production
@@ -130,28 +131,28 @@ export async function checkAlerts(input: AlertCheckInput): Promise<void> {
     prefs.peakProduction &&
     currentSolarW >= peakSolarW * 0.9 &&
     currentSolarW > 300 &&
-    isCooledDown('peak')
+    await isCooledDown('peak')
   ) {
     await showBrowserNotification(
       '☀️ Peak-Erzeugung jetzt!',
       `Deine Anlage läuft auf Hochtouren: ${Math.round(currentSolarW)} W`,
       'peak',
     );
-    setCooldown('peak');
+    await setCooldown('peak');
   }
 
   // ⚡ Low autarky
-  if (prefs.lowAutarky && selfSufficiency < prefs.lowAutarkyThreshold && isCooledDown('autarky')) {
+  if (prefs.lowAutarky && selfSufficiency < prefs.lowAutarkyThreshold && await isCooledDown('autarky')) {
     await showBrowserNotification(
       `⚡ Autarkie unter ${prefs.lowAutarkyThreshold} %`,
       `Aktuelle Eigenversorgung: ${selfSufficiency} % – hoher Netzbezug`,
       'autarky',
     );
-    setCooldown('autarky');
+    await setCooldown('autarky');
   }
 
   // 🎉 Amortization milestone
-  if (prefs.amortization && amortizationReached && isCooledDown('amortization')) {
+  if (prefs.amortization && amortizationReached && await isCooledDown('amortization')) {
     await showBrowserNotification(
       '🎉 Amortisation erreicht!',
       daysToAmortization != null
@@ -159,25 +160,25 @@ export async function checkAlerts(input: AlertCheckInput): Promise<void> {
         : 'Deine Anlage hat sich bereits amortisiert!',
       'amortization',
     );
-    setCooldown('amortization');
+    await setCooldown('amortization');
   }
 
   // 💰 Price alerts
   if (prefs.pricePeak && spotPriceCtKwh != null) {
-    if (spotPriceCtKwh > prefs.pricePeakThresholdCtKwh && isCooledDown('price-high')) {
+    if (spotPriceCtKwh > prefs.pricePeakThresholdCtKwh && await isCooledDown('price-high')) {
       await showBrowserNotification(
         '💸 Strompreis-Spitze!',
         `Spotpreis jetzt ${spotPriceCtKwh.toFixed(1)} ct/kWh – Eigenverbrauch maximieren!`,
         'price-high',
       );
-      setCooldown('price-high');
-    } else if (spotPriceCtKwh < prefs.priceLowThresholdCtKwh && isCooledDown('price-low')) {
+      await setCooldown('price-high');
+    } else if (spotPriceCtKwh < prefs.priceLowThresholdCtKwh && await isCooledDown('price-low')) {
       await showBrowserNotification(
         '🟢 Günstiger Strom jetzt',
         `Spotpreis jetzt nur ${spotPriceCtKwh.toFixed(1)} ct/kWh – guter Zeitpunkt für hohen Verbrauch`,
         'price-low',
       );
-      setCooldown('price-low');
+      await setCooldown('price-low');
     }
   }
 }
