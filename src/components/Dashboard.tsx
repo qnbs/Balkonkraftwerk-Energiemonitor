@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
+  ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from 'recharts';
-import { Zap, Sun, ArrowDownToLine, ArrowUpFromLine, Clock, TrendingUp, Sparkles, Leaf, Euro, Loader2 } from 'lucide-react';
+import { Zap, Sun, ArrowDownToLine, ArrowUpFromLine, Clock, TrendingUp, Sparkles, Leaf, Euro, Loader2, CloudSun, CalendarDays } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import type { Thresholds, Notification } from '../App';
@@ -10,7 +10,8 @@ import {
   generateData, simulateCurrentSolar, simulateCurrentConsumption,
   calculateSavings, calculateCO2, type TimeRange, type EnergyDataPoint,
 } from '../lib/simulation';
-import { analyzeEnergyData, hasApiKey } from '../lib/gemini';
+import { analyzeEnergyData, forecastEnergyData, hasApiKey, type ForecastInput, type DayForecast } from '../lib/gemini';
+import { fetchWeatherForecast, getWeatherCache, weatherToSolar, WeatherRateLimitError, type WeatherForecast } from '../lib/weather';
 
 interface DashboardProps {
   thresholds: Thresholds;
@@ -35,6 +36,15 @@ export default function Dashboard({ thresholds, addNotification }: DashboardProp
   const [aiResponse, setAiResponse] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [showAi, setShowAi] = useState(false);
+
+  // Forecast state
+  const [weatherForecast, setWeatherForecast] = useState<WeatherForecast | null>(null);
+  const [forecastLoading, setForecastLoading] = useState(false);
+  const [forecastText, setForecastText] = useState('');
+  const [showForecast, setShowForecast] = useState(false);
+  const [weatherCacheAge, setWeatherCacheAge] = useState<number | null>(null);
+  const [rateLimitWarning, setRateLimitWarning] = useState('');
+  const [forecastDays, setForecastDays] = useState<DayForecast[] | null>(null);
 
   useEffect(() => {
     localStorage.setItem('bkw-timerange', timeRange);
@@ -73,6 +83,25 @@ export default function Dashboard({ thresholds, addNotification }: DashboardProp
     };
   }, [data]);
 
+  // Merge weather forecast into chart data as dashed overlay (daily view only)
+  const forecastChartData = useMemo(() => {
+    if (!weatherForecast || timeRange !== 'daily') {
+      return data.map(d => ({ ...d, forecastSolar: undefined as number | undefined }));
+    }
+    const nowHour = new Date().getHours();
+    const todayStr = new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD
+    return data.map(point => {
+      const hour = parseInt(point.time, 10); // "14:00" → 14
+      if (hour < nowHour) return { ...point, forecastSolar: undefined as number | undefined };
+      const isoKey = `${todayStr}T${String(hour).padStart(2, '0')}:00`;
+      const wh = weatherForecast.hours.find(h => h.time === isoKey);
+      return {
+        ...point,
+        forecastSolar: wh != null ? weatherToSolar(wh.radiation, wh.cloudCover) : (undefined as number | undefined),
+      };
+    });
+  }, [data, weatherForecast, timeRange]);
+
   const handleAiAnalysis = useCallback(async () => {
     if (!hasApiKey()) {
       setAiResponse('⚠️ Bitte gib deinen Gemini API-Key in den **Settings** ein, um die KI-Analyse zu nutzen.');
@@ -103,6 +132,89 @@ export default function Dashboard({ thresholds, addNotification }: DashboardProp
       setAiLoading(false);
     }
   }, [timeRange, currentSolar, currentConsumption, metrics, data]);
+
+  const handleForecast = useCallback(async () => {
+    if (!hasApiKey()) {
+      setForecastText('⚠️ Bitte Gemini API-Key in den **Settings** eingeben, um die Prognose zu nutzen.');
+      setShowForecast(true);
+      return;
+    }
+    setForecastLoading(true);
+    setShowForecast(true);
+    setForecastText('');
+    setRateLimitWarning('');
+
+    let weather: WeatherForecast | null = null;
+    try {
+      weather = await fetchWeatherForecast();
+    } catch (err) {
+      if (err instanceof WeatherRateLimitError) {
+        setRateLimitWarning(err.message);
+        weather = getWeatherCache();
+      } else {
+        setForecastText(`❌ Wetter-Fehler: ${err instanceof Error ? err.message : String(err)}`);
+        setForecastLoading(false);
+        return;
+      }
+    }
+
+    if (!weather) {
+      setForecastLoading(false);
+      return;
+    }
+
+    setWeatherForecast(weather);
+    const ageMin = Math.round((Date.now() - weather.fetchedAt) / 60000);
+    setWeatherCacheAge(ageMin > 0 ? ageMin : null);
+
+    // Build per-day summary for Gemini prompt + 7-day chart
+    const avg = (arr: number[]) =>
+      arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0;
+    const maxVal = (arr: number[]) =>
+      arr.length ? Math.round(Math.max(...arr)) : 0;
+    const sumVal = (arr: number[]) =>
+      parseFloat(arr.reduce((a, b) => a + b, 0).toFixed(1));
+
+    const days: DayForecast[] = Array.from({ length: 7 }, (_, d) => {
+      const dateStr = new Date(Date.now() + d * 86400000).toLocaleDateString('sv-SE');
+      const dayHours = weather!.hours.filter(h => h.time.startsWith(dateStr));
+      const daylightHours = dayHours.filter(h => {
+        const hr = parseInt(h.time.split('T')[1]?.split(':')[0] ?? '0', 10);
+        return hr >= 6 && hr <= 20;
+      });
+      const estimatedKwh =
+        Math.round(daylightHours.reduce((acc, h) => acc + weatherToSolar(h.radiation, h.cloudCover) / 1000, 0) * 10) / 10;
+      const label =
+        d === 0
+          ? 'Heute'
+          : d === 1
+            ? 'Morgen'
+            : new Date(Date.now() + d * 86400000).toLocaleDateString('de-DE', { weekday: 'short' });
+      return {
+        datum: label,
+        avgCloudCover: avg(dayHours.map(h => h.cloudCover)),
+        maxRadiationWm2: maxVal(dayHours.map(h => h.radiation)),
+        totalPrecipMm: sumVal(dayHours.map(h => h.precipitation)),
+        estimatedKwh,
+      };
+    });
+    setForecastDays(days);
+
+    try {
+      const input: ForecastInput = {
+        aktuelleErzeugungW: Math.round(currentSolar),
+        aktuellerVerbrauchW: Math.round(currentConsumption),
+        heuteKwhBisher: metrics.totalSolar,
+        tage: days,
+        historischDurchschnittKwh: metrics.totalSolar,
+      };
+      const text = await forecastEnergyData(input);
+      setForecastText(text);
+    } catch (err) {
+      setForecastText(`❌ KI-Fehler: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    setForecastLoading(false);
+  }, [currentSolar, currentConsumption, metrics]);
 
   return (
     <div className="p-4 space-y-4 max-w-4xl mx-auto pb-24">
@@ -214,7 +326,7 @@ export default function Dashboard({ thresholds, addNotification }: DashboardProp
 
         <div className="h-64 w-full">
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={data} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
+            <ComposedChart data={forecastChartData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
               <defs>
                 <linearGradient id="gSolar" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.35} />
@@ -252,7 +364,19 @@ export default function Dashboard({ thresholds, addNotification }: DashboardProp
                   label={{ position: 'insideTopLeft', value: 'Spitzenlast', fill: '#ef4444', fontSize: 10 }}
                 />
               )}
-            </AreaChart>
+              {timeRange === 'daily' && weatherForecast && (
+                <Line
+                  type="monotone"
+                  dataKey="forecastSolar"
+                  name="Prognose (Wetter)"
+                  stroke="#a855f7"
+                  strokeWidth={2.5}
+                  strokeDasharray="8 4"
+                  dot={false}
+                  connectNulls={false}
+                />
+              )}
+            </ComposedChart>
           </ResponsiveContainer>
         </div>
       </div>
@@ -285,15 +409,99 @@ export default function Dashboard({ thresholds, addNotification }: DashboardProp
         </div>
       </div>
 
-      {/* AI Analysis Button */}
-      <button
-        onClick={handleAiAnalysis}
-        disabled={aiLoading}
-        className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl font-medium text-sm transition-all bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white shadow-md disabled:opacity-60"
-      >
-        {aiLoading ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
-        {aiLoading ? 'Gemini analysiert…' : 'KI-Analyse starten'}
-      </button>
+      {/* AI buttons row */}
+      <div className="grid grid-cols-2 gap-3">
+        <button
+          onClick={handleAiAnalysis}
+          disabled={aiLoading || forecastLoading}
+          className="flex items-center justify-center gap-2 py-3 rounded-2xl font-medium text-sm transition-all bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white shadow-md disabled:opacity-60"
+        >
+          {aiLoading ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+          <span className="hidden xs:inline">{aiLoading ? 'Analysiert…' : 'KI-Analyse'}</span>
+          <span className="xs:hidden">{aiLoading ? '…' : 'Analyse'}</span>
+        </button>
+        <button
+          onClick={handleForecast}
+          disabled={forecastLoading || aiLoading}
+          className="flex items-center justify-center gap-2 py-3 rounded-2xl font-medium text-sm transition-all bg-gradient-to-r from-sky-500 to-cyan-500 hover:from-sky-600 hover:to-cyan-600 text-white shadow-md disabled:opacity-60"
+        >
+          {forecastLoading ? <Loader2 size={16} className="animate-spin" /> : <CloudSun size={16} />}
+          <span>{forecastLoading ? 'Prognose…' : '24h / 7-Tage'}</span>
+        </button>
+      </div>
+
+      {/* Forecast Response */}
+      <AnimatePresence>
+        {showForecast && (forecastText || rateLimitWarning) && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="bg-white dark:bg-slate-900 rounded-2xl p-5 shadow-sm border border-sky-200 dark:border-sky-800 overflow-hidden"
+          >
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
+              <CloudSun size={16} className="text-sky-500 shrink-0" />
+              <h4 className="text-sm font-bold text-sky-700 dark:text-sky-300">Energieprognose</h4>
+              {weatherCacheAge !== null && (
+                <span className="text-[10px] text-amber-600 bg-amber-50 dark:bg-amber-950 px-2 py-0.5 rounded-full">
+                  Wetter {weatherCacheAge} Min. alt
+                </span>
+              )}
+              <button
+                onClick={() => setShowForecast(false)}
+                className="ml-auto text-xs text-slate-400 hover:text-slate-600 shrink-0"
+              >
+                Schließen
+              </button>
+            </div>
+            {rateLimitWarning && (
+              <div className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 px-3 py-2 rounded-xl mb-3 flex items-start gap-2">
+                <span className="mt-0.5">⏱️</span>
+                <span>{rateLimitWarning} Wetterdaten aus Cache verwendet.</span>
+              </div>
+            )}
+            {/* 7-day estimated kWh mini-chart */}
+            {forecastDays && (
+              <div className="mb-4">
+                <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                  <CalendarDays size={11} />
+                  7-Tage-Schätzung (kWh)
+                </p>
+                <div className="flex items-end gap-1 h-16">
+                  {forecastDays.map(day => {
+                    const max = Math.max(...forecastDays.map(d => d.estimatedKwh), 0.1);
+                    const pct = (day.estimatedKwh / max) * 100;
+                    const isToday = day.datum === 'Heute';
+                    return (
+                      <div key={day.datum} className="flex-1 flex flex-col items-center gap-0.5">
+                        <span className="text-[9px] text-slate-500 dark:text-slate-400 font-medium">
+                          {day.estimatedKwh}
+                        </span>
+                        <div
+                          className={`w-full rounded-t-md transition-all ${
+                            isToday ? 'bg-sky-400 dark:bg-sky-500' : 'bg-sky-200 dark:bg-sky-800'
+                          }`}
+                          style={{ height: `${Math.max(4, pct * 0.48)}px` }}
+                        />
+                        <span className={`text-[9px] font-medium ${
+                          isToday ? 'text-sky-600 dark:text-sky-400' : 'text-slate-400'
+                        }`}>
+                          {day.datum.slice(0, 2)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {forecastText && (
+              <div className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed">
+                <ReactMarkdown>{forecastText}</ReactMarkdown>
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* AI Response */}
       <AnimatePresence>
