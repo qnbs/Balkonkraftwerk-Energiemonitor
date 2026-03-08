@@ -92,3 +92,23 @@ export function calculateSavings(solarKwh: number): number {
 export function calculateCO2(solarKwh: number): number {
   return solarKwh * CO2_PER_KWH;
 }
+
+/**
+ * Simulate battery state-of-charge evolution over a 3-second tick.
+ * @param prevPct   Current SOC in percent (0–100)
+ * @param solarW    Current solar output in Watt
+ * @param consumptionW  Current consumption in Watt
+ * @param capacityKwh   Battery capacity in kWh
+ */
+export function simulateBattery(
+  prevPct: number,
+  solarW: number,
+  consumptionW: number,
+  capacityKwh: number,
+): number {
+  if (capacityKwh <= 0) return prevPct;
+  const netW = solarW - consumptionW;
+  const deltaKwh = (netW * 3) / 3_600_000; // 3s interval in Wh → kWh
+  const deltaPct = (deltaKwh / capacityKwh) * 100;
+  return Math.max(0, Math.min(100, prevPct + deltaPct));
+}

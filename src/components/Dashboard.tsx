@@ -1,32 +1,36 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from 'recharts';
-import { Zap, Sun, ArrowDownToLine, ArrowUpFromLine, Clock, TrendingUp, Sparkles, Leaf, Euro, Loader2, CloudSun, CalendarDays, AlertTriangle } from 'lucide-react';
+import { Zap, Sun, ArrowDownToLine, ArrowUpFromLine, Clock, TrendingUp, Sparkles, Leaf, Euro, Loader2, CloudSun, CalendarDays, AlertTriangle, Battery, BatteryCharging } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import type { Thresholds, Notification } from '../App';
 import {
   generateData, simulateCurrentSolar, simulateCurrentConsumption,
-  calculateSavings, calculateCO2, type TimeRange, type EnergyDataPoint,
+  calculateSavings, calculateCO2, simulateBattery, type TimeRange, type EnergyDataPoint,
 } from '../lib/simulation';
 import { analyzeEnergyData, forecastEnergyData, hasApiKey, type ForecastInput, type DayForecast } from '../lib/gemini';
 import { fetchWeatherForecast, getWeatherCache, weatherToSolar, WeatherRateLimitError, type WeatherForecast } from '../lib/weather';
 import { fetchEsp32Data, getEsp32Url } from '../lib/esp32';
+import type { HAData } from '../lib/ha';
 
 interface DashboardProps {
   thresholds: Thresholds;
   addNotification: (notif: Omit<Notification, 'id' | 'timestamp' | 'read'>) => void;
   liveMode: boolean;
+  hasBattery?: boolean;
+  batteryCapacity?: number;
+  haData?: HAData | null;
 }
 
-const RANGES: { key: TimeRange; label: string }[] = [
-  { key: 'daily', label: 'Tag' },
-  { key: 'weekly', label: 'Woche' },
-  { key: 'monthly', label: 'Monat' },
+const RANGES_KEYS: Array<{ key: TimeRange }> = [
+  { key: 'daily' }, { key: 'weekly' }, { key: 'monthly' },
 ];
 
-export default function Dashboard({ thresholds, addNotification, liveMode }: DashboardProps) {
+export default function Dashboard({ thresholds, addNotification, liveMode, hasBattery = false, batteryCapacity = 5, haData }: DashboardProps) {
+  const { t } = useTranslation();
   const [timeRange, setTimeRange] = useState<TimeRange>(() =>
     (localStorage.getItem('bkw-timerange') as TimeRange) || 'daily',
   );
@@ -50,17 +54,23 @@ export default function Dashboard({ thresholds, addNotification, liveMode }: Das
 
   // Live mode error
   const [liveError, setLiveError] = useState<string | null>(null);
+  const [batteryPct, setBatteryPct] = useState(50);
 
   useEffect(() => {
     localStorage.setItem('bkw-timerange', timeRange);
     setData(generateData(timeRange));
   }, [timeRange]);
 
-  // Live simulation OR real ESP32 polling
+  // Live simulation OR real ESP32 polling (skipped if haData present)
   useEffect(() => {
+    if (haData) return; // HA overrides all local data
     if (!liveMode) {
       const interval = setInterval(() => {
-        setCurrentSolar((prev) => simulateCurrentSolar(prev));
+        setCurrentSolar((prev) => {
+          const next = simulateCurrentSolar(prev);
+          if (hasBattery) setBatteryPct((b) => simulateBattery(b, next, 310, batteryCapacity));
+          return next;
+        });
         setCurrentConsumption((prev) => simulateCurrentConsumption(prev));
       }, 3000);
       return () => clearInterval(interval);
@@ -72,6 +82,7 @@ export default function Dashboard({ thresholds, addNotification, liveMode }: Das
           if (active) {
             setCurrentSolar(d.solar_w);
             setCurrentConsumption(d.consumption_w);
+            if (d.battery_pct != null) setBatteryPct(d.battery_pct);
             setLiveError(null);
           }
         } catch (err) {
@@ -82,7 +93,15 @@ export default function Dashboard({ thresholds, addNotification, liveMode }: Das
       const interval = setInterval(poll, 5000);
       return () => { active = false; clearInterval(interval); };
     }
-  }, [liveMode]);
+  }, [liveMode, haData, hasBattery, batteryCapacity]);
+
+  // Sync HA data into current readings
+  useEffect(() => {
+    if (!haData) return;
+    setCurrentSolar(haData.solarW);
+    setCurrentConsumption(haData.loadW);
+    if (haData.batteryPct != null) setBatteryPct(haData.batteryPct);
+  }, [haData]);
 
   const gridExchange = currentSolar - currentConsumption;
   const isFeedingGrid = gridExchange > 0;
@@ -253,10 +272,10 @@ export default function Dashboard({ thresholds, addNotification, liveMode }: Das
             <Sun size={22} />
           </div>
           <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1">
-            Erzeugung
+            {t('dashboard.generation')}
             {liveMode && (
               <span className="text-[8px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-900/40 px-1.5 py-0.5 rounded-full ml-1">
-                LIVE
+                {t('dashboard.liveTag')}
               </span>
             )}
           </span>
@@ -275,7 +294,7 @@ export default function Dashboard({ thresholds, addNotification, liveMode }: Das
           <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-500 flex items-center justify-center mb-2">
             <Zap size={22} />
           </div>
-          <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Verbrauch</span>
+          <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">{t('dashboard.consumption')}</span>
           <span className="text-2xl font-light">
             {Math.round(currentConsumption)}
             <span className="text-sm text-slate-400 ml-1">W</span>
@@ -322,7 +341,7 @@ export default function Dashboard({ thresholds, addNotification, liveMode }: Das
           </div>
           <div>
             <h3 className={`text-xs font-bold uppercase tracking-wider ${isFeedingGrid ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`}>
-              {isFeedingGrid ? 'Einspeisung' : 'Netzbezug'}
+              {isFeedingGrid ? t('dashboard.feedIn') : t('dashboard.gridDraw')}
             </h3>
             <p className={`text-xl font-medium ${isFeedingGrid ? 'text-emerald-900 dark:text-emerald-100' : 'text-rose-900 dark:text-rose-100'}`}>
               {Math.abs(Math.round(gridExchange))} W
@@ -336,29 +355,63 @@ export default function Dashboard({ thresholds, addNotification, liveMode }: Das
         <div className="bg-white dark:bg-slate-900 rounded-xl p-3 border border-slate-100 dark:border-slate-800 text-center">
           <Leaf className="mx-auto text-emerald-500 mb-1" size={18} />
           <p className="text-lg font-semibold text-emerald-600 dark:text-emerald-400">{metrics.co2} kg</p>
-          <p className="text-[10px] text-slate-500 uppercase">CO₂ gespart</p>
+          <p className="text-[10px] text-slate-500 uppercase">{t('dashboard.co2')}</p>
         </div>
         <div className="bg-white dark:bg-slate-900 rounded-xl p-3 border border-slate-100 dark:border-slate-800 text-center">
           <Euro className="mx-auto text-amber-500 mb-1" size={18} />
           <p className="text-lg font-semibold text-amber-600 dark:text-amber-400">{metrics.savings} €</p>
-          <p className="text-[10px] text-slate-500 uppercase">Ersparnis</p>
+          <p className="text-[10px] text-slate-500 uppercase">{t('dashboard.savings')}</p>
         </div>
         <div className="bg-white dark:bg-slate-900 rounded-xl p-3 border border-slate-100 dark:border-slate-800 text-center">
           <TrendingUp className="mx-auto text-blue-500 mb-1" size={18} />
           <p className="text-lg font-semibold text-blue-600 dark:text-blue-400">{metrics.selfSufficiency}%</p>
-          <p className="text-[10px] text-slate-500 uppercase">Autarkie</p>
+          <p className="text-[10px] text-slate-500 uppercase">{t('dashboard.autarky')}</p>
         </div>
       </div>
+
+      {/* Battery Card – only when hasBattery */}
+      <AnimatePresence>
+        {hasBattery && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="bg-white dark:bg-slate-900 rounded-2xl p-4 shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden"
+          >
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                {currentSolar > currentConsumption
+                  ? <BatteryCharging size={18} className="text-emerald-500" />
+                  : <Battery size={18} className="text-amber-500" />}
+                <span className="text-xs font-bold text-slate-600 dark:text-slate-300 uppercase tracking-widest">{t('dashboard.battery')}</span>
+              </div>
+              <span className="text-xl font-bold text-slate-800 dark:text-slate-100">{Math.round(batteryPct)} %</span>
+            </div>
+            <div className="w-full h-3 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+              <motion.div
+                className={`h-full rounded-full ${
+                  batteryPct > 60 ? 'bg-emerald-500' : batteryPct > 25 ? 'bg-amber-400' : 'bg-rose-500'
+                }`}
+                animate={{ width: `${batteryPct}%` }}
+                transition={{ duration: 1, ease: 'easeOut' }}
+              />
+            </div>
+            <div className="flex justify-between text-[10px] text-slate-400 mt-1">
+              <span>0%</span><span>{batteryCapacity} kWh</span><span>100%</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Chart */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 shadow-sm border border-slate-100 dark:border-slate-800">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-3">
           <h3 className="text-base font-bold flex items-center gap-2">
             <TrendingUp className="text-emerald-600" size={18} />
-            Verlauf
+            {t('dashboard.history')}
           </h3>
           <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-lg w-full sm:w-auto">
-            {RANGES.map((r) => (
+            {RANGES_KEYS.map((r) => (
               <button
                 key={r.key}
                 onClick={() => setTimeRange(r.key)}
@@ -368,7 +421,7 @@ export default function Dashboard({ thresholds, addNotification, liveMode }: Das
                     : 'text-slate-500 hover:text-slate-700'
                 }`}
               >
-                {r.label}
+                {t(`dashboard.${r.key === 'daily' ? 'day' : r.key === 'weekly' ? 'week' : 'month'}`)}
               </button>
             ))}
           </div>
@@ -435,17 +488,17 @@ export default function Dashboard({ thresholds, addNotification, liveMode }: Das
       <div className="bg-slate-900 dark:bg-slate-800 text-white rounded-2xl p-5 shadow-xl">
         <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
           <Clock size={14} />
-          {timeRange === 'daily' ? 'Tagesbilanz' : timeRange === 'weekly' ? 'Wochenbilanz' : 'Monatsbilanz'}
+          {timeRange === 'daily' ? t('dashboard.dailyBalance') : timeRange === 'weekly' ? t('dashboard.weeklyBalance') : t('dashboard.monthlyBalance')}
         </h3>
         <div className="grid grid-cols-3 gap-3 text-center divide-x divide-slate-700">
           <div>
-            <p className="text-[10px] text-slate-400 mb-1">Erzeugt</p>
+            <p className="text-[10px] text-slate-400 mb-1">{t('dashboard.generated')}</p>
             <p className="text-xl font-bold text-amber-400">
               {metrics.totalSolar} <span className="text-xs font-normal text-amber-300/60">kWh</span>
             </p>
           </div>
           <div>
-            <p className="text-[10px] text-slate-400 mb-1">Verbraucht</p>
+            <p className="text-[10px] text-slate-400 mb-1">{t('dashboard.consumed')}</p>
             <p className="text-xl font-bold text-blue-400">
               {metrics.totalConsumption} <span className="text-xs font-normal text-blue-300/60">kWh</span>
             </p>
@@ -467,8 +520,8 @@ export default function Dashboard({ thresholds, addNotification, liveMode }: Das
           className="flex items-center justify-center gap-2 py-3 rounded-2xl font-medium text-sm transition-all bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white shadow-md disabled:opacity-60"
         >
           {aiLoading ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-          <span className="hidden xs:inline">{aiLoading ? 'Analysiert…' : 'KI-Analyse'}</span>
-          <span className="xs:hidden">{aiLoading ? '…' : 'Analyse'}</span>
+          <span className="hidden xs:inline">{aiLoading ? t('dashboard.aiAnalyzing') : t('dashboard.aiAnalysis')}</span>
+          <span className="xs:hidden">{aiLoading ? '…' : t('dashboard.aiAnalysis')}</span>
         </button>
         <button
           onClick={handleForecast}
@@ -476,7 +529,7 @@ export default function Dashboard({ thresholds, addNotification, liveMode }: Das
           className="flex items-center justify-center gap-2 py-3 rounded-2xl font-medium text-sm transition-all bg-gradient-to-r from-sky-500 to-cyan-500 hover:from-sky-600 hover:to-cyan-600 text-white shadow-md disabled:opacity-60"
         >
           {forecastLoading ? <Loader2 size={16} className="animate-spin" /> : <CloudSun size={16} />}
-          <span>{forecastLoading ? 'Prognose…' : '24h / 7-Tage'}</span>
+          <span>{forecastLoading ? t('dashboard.forecastLoading') : t('dashboard.forecast')}</span>
         </button>
       </div>
 

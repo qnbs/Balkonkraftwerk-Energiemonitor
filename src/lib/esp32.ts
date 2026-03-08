@@ -5,6 +5,7 @@ export interface ESP32Payload {
   uptime_s?: number;
   ip?: string;
   age_ms?: number;
+  battery_pct?: number;
 }
 
 const LIVE_MODE_KEY = 'bkw-live-mode';

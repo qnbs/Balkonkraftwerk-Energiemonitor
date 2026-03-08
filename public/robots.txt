@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://qnbs.github.io/Balkonkraftwerk-Energiemonitor/sitemap.xml

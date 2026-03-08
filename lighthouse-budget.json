@@ -1,0 +1,16 @@
+[
+  {
+    "path": "/*",
+    "timings": [
+      { "metric": "interactive",            "budget": 5000 },
+      { "metric": "first-contentful-paint", "budget": 2000 },
+      { "metric": "largest-contentful-paint","budget": 3000 }
+    ],
+    "lighthouse": [
+      { "metric": "performance",    "minScore": 0.80 },
+      { "metric": "accessibility",  "minScore": 0.95 },
+      { "metric": "best-practices", "minScore": 0.90 },
+      { "metric": "seo",            "minScore": 0.90 }
+    ]
+  }
+]

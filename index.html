@@ -1,12 +1,19 @@
 <!doctype html>
-<html lang="de" class="light">
+<html lang="de" dir="ltr" class="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#059669" />
+    <meta name="color-scheme" content="light dark" />
     <meta name="description" content="Energiemonitor & Bauanleitung für dein Balkonkraftwerk – Open Source PWA" />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://qnbs.github.io/Balkonkraftwerk-Energiemonitor/" />
     <link rel="icon" href="/Balkonkraftwerk-Energiemonitor/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/Balkonkraftwerk-Energiemonitor/pwa-192.png" />
+    <!-- Preconnect for Open-Meteo weather API -->
+    <link rel="preconnect" href="https://api.open-meteo.com" crossorigin />
+    <!-- Preload app entry point -->
+    <link rel="modulepreload" href="/Balkonkraftwerk-Energiemonitor/src/main.tsx" />
     <title>Balkonkraftwerk Energiemonitor</title>
   </head>
   <body class="bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 antialiased">

@@ -2,10 +2,13 @@ import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { Activity, BookOpen, Wrench, Settings as SettingsIcon, Bell, X, Sun, Moon, Zap, TrendingUp, Cpu } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useTransform, type PanInfo } from 'motion/react';
 import { Toaster, toast } from 'sonner';
+import { useTranslation } from 'react-i18next';
 import { ErrorBoundary, OfflineBanner } from './components/ui/ErrorBoundary';
 import { DashboardSkeleton } from './components/ui/Skeleton';
+import { LanguageSwitcher } from './components/ui/LanguageSwitcher';
 import { getStoredTheme, setStoredTheme, type Theme } from './lib/theme';
 import { isLiveMode, setLiveMode } from './lib/esp32';
+import { HAClient, getStoredHAConfig, type HAStatus, type HAData } from './lib/ha';
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const Manual = lazy(() => import('./components/Manual'));
@@ -44,10 +47,18 @@ const TAB_IDS = tabs.map((t) => t.id);
 const SWIPE_THRESHOLD = 50;
 
 export default function App() {
+  const { t, i18n } = useTranslation();
   const [activeTab, setActiveTab] = useState<TabId>('dashboard');
   const [showNotifications, setShowNotifications] = useState(false);
   const [theme, setTheme] = useState<Theme>(getStoredTheme);
   const [liveMode, setLiveModeState] = useState(isLiveMode);
+  const [hasBattery, setHasBattery] = useState(() => localStorage.getItem('bkw-has-battery') === 'true');
+  const [batteryCapacity, setBatteryCapacity] = useState(
+    () => parseFloat(localStorage.getItem('bkw-battery-capacity') ?? '5'),
+  );
+  const [haStatus, setHaStatus] = useState<HAStatus>('disconnected');
+  const [haData, setHaData] = useState<HAData | null>(null);
+  const haClientRef = useRef<HAClient | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [swipeDirection, setSwipeDirection] = useState<1 | -1>(1);
 
@@ -55,6 +66,39 @@ export default function App() {
     setLiveMode(v);
     setLiveModeState(v);
   };
+
+  const handleHaConnect = useCallback(() => {
+    const cfg = getStoredHAConfig();
+    const client = new HAClient(cfg);
+    client.onStatusChange = (status, error) => {
+      setHaStatus(status);
+      if (status === 'connected') toast.success('Home Assistant verbunden');
+      if (status === 'error') toast.error('HA Fehler', { description: error });
+    };
+    client.onDataUpdate = (data) => setHaData(data);
+    haClientRef.current?.disconnect();
+    haClientRef.current = client;
+    client.connect();
+  }, []);
+
+  const handleHaDisconnect = useCallback(() => {
+    haClientRef.current?.disconnect();
+    haClientRef.current = null;
+    setHaData(null);
+    setHaStatus('disconnected');
+  }, []);
+
+  // Persist battery settings
+  useEffect(() => {
+    localStorage.setItem('bkw-has-battery', String(hasBattery));
+    localStorage.setItem('bkw-battery-capacity', String(batteryCapacity));
+  }, [hasBattery, batteryCapacity]);
+
+  // Update html lang/dir on language change
+  useEffect(() => {
+    document.documentElement.setAttribute('lang', i18n.language);
+    document.documentElement.setAttribute('dir', i18n.dir(i18n.language));
+  }, [i18n.language]);
   const mainRef = useRef<HTMLElement>(null);
   const dragX = useMotionValue(0);
   const dragOpacity = useTransform(dragX, [-200, 0, 200], [0.5, 1, 0.5]);
@@ -194,7 +238,8 @@ export default function App() {
             BKW Monitor
           </h1>
           <div className="flex items-center gap-1">
-            <motion.button
+            <LanguageSwitcher />
+          <motion.button
               whileTap={{ scale: 0.9 }}
               onClick={toggleTheme}
               className="p-2 hover:bg-white/10 rounded-full transition-colors"
@@ -333,13 +378,25 @@ export default function App() {
               transition={{ duration: 0.2, ease: 'easeInOut' }}
             >
               <Suspense fallback={<DashboardSkeleton />}>
-                {activeTab === 'dashboard' && <Dashboard liveMode={liveMode} thresholds={thresholds} addNotification={addNotification} />}
+                {activeTab === 'dashboard' && <Dashboard liveMode={liveMode} hasBattery={hasBattery} batteryCapacity={batteryCapacity} haData={haData} thresholds={thresholds} addNotification={addNotification} />}
                 {activeTab === 'manual' && <Manual />}
                 {activeTab === 'materials' && <Materials />}
                 {activeTab === 'economics' && <Economics />}
                 {activeTab === 'hardware' && <Hardware liveMode={liveMode} onLiveModeChange={handleLiveModeChange} />}
                 {activeTab === 'settings' && (
-                  <Settings thresholds={thresholds} setThresholds={setThresholds} theme={theme} toggleTheme={toggleTheme} />
+                  <Settings
+                    thresholds={thresholds}
+                    setThresholds={setThresholds}
+                    theme={theme}
+                    toggleTheme={toggleTheme}
+                    hasBattery={hasBattery}
+                    onHasBatteryChange={setHasBattery}
+                    batteryCapacity={batteryCapacity}
+                    onBatteryCapacityChange={setBatteryCapacity}
+                    haStatus={haStatus}
+                    onHaConnect={handleHaConnect}
+                    onHaDisconnect={handleHaDisconnect}
+                  />
                 )}
               </Suspense>
             </motion.div>
@@ -380,7 +437,7 @@ export default function App() {
                   >
                     <Icon size={22} />
                   </motion.span>
-                  <span className="text-[10px] font-medium uppercase tracking-wider">{tab.label}</span>
+                  <span className="text-[10px] font-medium uppercase tracking-wider">{t(`nav.${tab.id}`)}</span>
                 </motion.button>
               );
             })}
