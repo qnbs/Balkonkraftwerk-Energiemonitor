@@ -8,7 +8,209 @@
 
 **Live-Demo:** https://qnbs.github.io/Balkonkraftwerk-Energiemonitor/
 
-A fully offline-capable Progressive Web App for monitoring, analyzing and optimizing your balcony power plant (Balkonkraftwerk / micro inverter). Works without any backend — all data stays in your browser.
+Ein vollständig offline-fähiges Progressive Web App zur Überwachung, Analyse und Optimierung deines Balkonkraftwerks. Kein Backend nötig — alle Daten bleiben im Browser.
+
+---
+
+## ✨ Features
+
+| Feature | Details |
+|---|---|
+| 📊 **Live Dashboard** | Echtzeit-Solarproduktion & Verbrauch mit animierten Karten |
+| 💡 **Live Strompreise** | aWATTar Germany EPEX Spot-Preise, 1-Stunden-Cache, 24-h-Chart |
+| 💸 **Dynamische Ersparnis** | Eigenverbrauch-Berechnung mit aktuellem Handelspreis (Spot + Abgaben) |
+| 🟢 **Einspeisung-Banner** | „Jetzt lohnt sich Einspeisung!" / „Günstiger Strom jetzt!" situativ |
+| 🔔 **Web Push Notifications** | Lokale SW-Notifications: Peak, Autarkie, Amortisation, Preis-Spitze |
+| ⚙️ **Alert-Konfiguration** | Per-Alert-Toggle + Schwellwert-Slider in den Settings |
+| 🔋 **Batteriespeicher** | Optionales SOC-Tracking (Simulation oder ESP32/HA) |
+| 🤖 **Gemini KI-Analyse** | BYOK — dein Key, direkt zur Google API, verlässt nie den Browser |
+| 🌤 **7-Tage-Prognose** | Open-Meteo Wetter → KI-Energieprognose mit Chart-Overlay |
+| 🏠 **Home Assistant** | WebSocket-Integration (Auth + state_changed-Subscription) |
+| 🔌 **ESP32 Live Mode** | HTTP-Polling alle 5 s, QR-Setup, Arduino-Sketch inklusive |
+| 🌍 **i18n (de / en)** | Vollständige deutsche & englische Übersetzungen, RTL-vorbereitet |
+| 🌙 **Dark Mode** | System-aware + manuelle Umschaltung |
+| 📲 **PWA** | Installierbar, offline-first, Service Worker mit Push-Handler |
+| 💶 **Rendite-Tab** | 20-Jahres-ROI-Rechner mit Amortisationstabelle |
+| 🛠 **Hilfe-Tab** | 10-Schritte-Montagehandbuch + interaktive Stückliste (vormals 2 Tabs) |
+
+---
+
+## 💡 Live Strompreise (aWATTar Germany)
+
+Das Dashboard fragt stündlich die **EPEX Spot Intraday-Preise** für Deutschland über die kostenlose [aWATTar-API](https://api.awattar.de/v1/marketdata) ab:
+
+- **Live Spot-Preis** in ct/kWh mit Preis-Level-Indikator (Sehr günstig → Spitzenpreis)
+- **Geschätzter Haushaltspreis** = Spot + ~17,2 ct/kWh (Netzentgelte, Steuern, Abgaben)
+- **24-h Balkendiagramm** der heutigen und morgigen Stundenpreise
+- **Situatives Banner**: „Jetzt lohnt sich Einspeisung!" (hoher Preis) oder „Günstiger Strom jetzt" (Niedrigpreis)
+- **Dynamische Ersparnis-Berechnung** im Dashboard nutzt den aktuellen Handelspreis statt Fixwert
+- Daten werden **1 Stunde gecacht** → offline-fähig
+
+---
+
+## 🔔 Web Push Notifications
+
+Benachrichtigungen werden lokal über den Service Worker ausgelöst (kein Backend nötig):
+
+| Alert | Trigger |
+|---|---|
+| ☀️ **Peak-Erzeugung** | Anlage läuft auf ≥ 90 % ihrer historischen Spitze |
+| ⚡ **Niedrige Autarkie** | Eigenversorgung fällt unter konfigurierten Schwellwert (Standard: 50 %) |
+| 🎉 **Amortisation** | Einmalige Meilenstein-Notification bei Erreichen der Amortisation |
+| 💸 **Strompreis-Spitze** | Spot-Preis überschreitet / unterschreitet konfigurierten Schwellwert |
+
+Konfiguration: **Settings → Push-Benachrichtigungen** — Pro Alert ein Toggle + Schwellwert-Slider.  
+30-Minuten-Cooldown pro Alert-Typ verhindert Benachrichtigungs-Spam.
+
+---
+
+## 🏗 Architektur
+
+```
+src/
+├── App.tsx               # Root — Routing, HA, Theme, i18n, Strompreis-Fetch
+├── main.tsx              # React 19 Entry, i18n init
+├── sw.ts                 # Service Worker (injectManifest + Push-Handler)
+├── components/
+│   ├── Dashboard.tsx     # Live-Daten, Strompreis, Banner, Chart, KI, Forecast
+│   ├── Settings.tsx      # Sprache, Dark Mode, BYOK, Push-Alerts, Batterie, HA
+│   ├── Hardware.tsx      # ESP32 Live Mode, QR, Arduino-Sketch
+│   ├── Economics.tsx     # Amortisation + 20-Jahres-Projektion
+│   ├── Help.tsx          # Hilfe-Tab: Montagehandbuch + Stückliste (kombiniert)
+│   ├── DeviceManager.tsx # Multi-Anlagen-Verwaltung
+│   └── ui/
+│       ├── ErrorBoundary.tsx
+│       ├── LanguageSwitcher.tsx
+│       └── Skeleton.tsx
+└── lib/
+    ├── i18n.ts           # i18next, de + en Inline-Resources
+    ├── ha.ts             # HAClient — HA WebSocket Protokoll
+    ├── gemini.ts         # Gemini 2.0 Flash — Analyse + Prognose
+    ├── weather.ts        # Open-Meteo — 7-Tage-Prognose
+    ├── simulation.ts     # Datensimulation + Batteriemodell
+    ├── esp32.ts          # ESP32 HTTP-Polling
+    ├── electricity.ts    # aWATTar EPEX Spot Preise (NEU)
+    ├── push.ts           # Web Push Alerts + Cooldown-Management (NEU)
+    ├── deviceStore.ts    # Multi-Anlagen localStorage
+    └── theme.ts          # Dark/Light Theme
+```
+
+---
+
+## 🚀 Quick Start
+
+```bash
+git clone https://github.com/qnbs/Balkonkraftwerk-Energiemonitor.git
+cd Balkonkraftwerk-Energiemonitor
+npm install
+npm run dev          # http://localhost:3000
+```
+
+### Build & Deploy
+
+```bash
+npm run build        # → dist/
+npm run preview      # lokale Vorschau des gebauten PWA
+```
+
+GitHub Actions deployt automatisch bei jedem Push auf `main` → GitHub Pages.
+
+---
+
+## 🔑 Gemini KI (BYOK)
+
+1. Kostenlosen Key holen: https://aistudio.google.com/apikey
+2. **Settings → Gemini KI** öffnen und Key einfügen
+3. Key wird nur in `localStorage` gespeichert — verlässt nie den Browser
+4. **KI-Analyse** oder **24h / 7-Tage** im Dashboard klicken
+
+---
+
+## 🏠 Home Assistant Integration
+
+1. **Long-Lived Access Token** in HA anlegen (*Profil → Sicherheit*)
+2. **Settings → Home Assistant** öffnen
+3. WebSocket-URL eingeben: `ws://homeassistant.local:8123/api/websocket`
+4. Token + Entity-IDs für Solar, Verbrauch, Batterie eintragen
+5. **Verbinden** klicken — Dashboard wechselt automatisch auf HA-Livedaten
+
+Kompatibel mit HA 2021.1+ (Standard WebSocket API).
+
+---
+
+## 🔌 ESP32 Hardware-Setup
+
+1. ESP32 mit dem Arduino-Sketch aus dem **Hardware-Tab** flashen
+2. WLAN-QR-Code scannen zum Verbinden mit dem Heimnetz
+3. ESP32-IP im Hardware-Tab eingeben → **Verbindung testen**
+4. **Live (ESP32)** Modus aktivieren — Polling alle 5 Sekunden
+
+Erwartetes JSON vom ESP32:
+```json
+{ "solar_w": 420, "consumption_w": 310, "grid_w": 110, "battery_pct": 72 }
+```
+
+---
+
+## 🧪 Tests
+
+```bash
+npm run test          # Vitest Unit-Tests (Simulation, Batteriemodell)
+npx playwright test   # E2E Smoke-Tests (Chromium)
+```
+
+---
+
+## ✅ Production Checklist
+
+- [x] PWA Manifest + Service Worker (injectManifest Modus)
+- [x] Offline-first Precaching (30+ Einträge)
+- [x] i18n — Deutsch & Englisch, LanguageDetector
+- [x] Dark Mode (system-aware + localStorage)
+- [x] Home Assistant WebSocket Client
+- [x] Batteriespeicher Simulation & SOC Anzeige
+- [x] Web Push Notifications via Service Worker (lokal, kein Backend)
+- [x] Alert-Konfiguration pro Typ mit Cooldown-Management
+- [x] **Live Strompreise (aWATTar EPEX Spot)** — gecacht, offline-fähig
+- [x] **Dynamische Ersparnis-Berechnung** mit Live-Handelspreis
+- [x] **Einspeisung-Banner** situativ nach Preisniveau
+- [x] **24-h Preis-Chart** im Dashboard
+- [x] Gemini KI Analyse & 7-Tage-Prognose (BYOK, 30 min Cache)
+- [x] ESP32 Live-Modus mit Fallback auf Simulation
+- [x] Code-Splitting — 10+ lazy-geladene Chunks
+- [x] **Help-Tab** — Montagehandbuch + Stückliste kombiniert (crash-sicher)
+- [x] Vitest Unit-Tests
+- [x] Playwright E2E Smoke-Tests
+- [x] Lighthouse CI Workflow
+- [x] `robots.txt` + Canonical URL + Preconnect Hints
+- [x] GitHub Actions Deploy → GitHub Pages
+
+---
+
+## 🛠 Tech Stack
+
+| Ebene | Bibliothek |
+|---|---|
+| Framework | React 19 + TypeScript 5.8 |
+| Build | Vite 6 + vite-plugin-pwa 0.21 |
+| Styling | Tailwind CSS 4 |
+| Charts | Recharts 3.8 |
+| Animation | Framer Motion (motion/react) |
+| i18n | react-i18next + i18next-browser-languagedetector |
+| KI | @google/generative-ai (Gemini 2.0 Flash) |
+| Wetter | Open-Meteo (kostenlos, kein API-Key) |
+| Strompreise | aWATTar Germany EPEX Spot API (kostenlos, kein Key) |
+| Toasts | sonner v2 |
+| QR Codes | qrcode.react v4 |
+| SW | workbox-precaching + workbox-core |
+| Tests | Vitest + Playwright |
+
+---
+
+## 📄 Lizenz
+
+MIT © 2025–2026 qnbs
+
 
 ---
 

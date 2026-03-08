@@ -5,7 +5,7 @@ import LanguageDetector from 'i18next-browser-languagedetector';
 const de = {
   nav: {
     dashboard: 'Monitor', manual: 'Montage', materials: 'Material',
-    economics: 'Rendite', hardware: 'ESP32', settings: 'Setup',
+    economics: 'Rendite', hardware: 'ESP32', settings: 'Setup', devices: 'Anlagen',
   },
   header: { title: 'BKW Monitor' },
   dashboard: {
@@ -70,12 +70,40 @@ const de = {
     shareTitle: 'App teilen', copyCode: 'Kopieren', copied: 'Kopiert!',
   },
   economics: { title: 'Wirtschaftlichkeit', subtitle: 'Amortisationsrechner & 20-Jahres-Projektion' },
+  report: {
+    title: 'Export & Teilen',
+    csvTitle: 'CSV-Export', csvSub: 'Letzte 30 Tage als Excel-kompatible Tabelle',
+    monthlyPdf: 'Monatsbericht PDF', monthlyPdfSub: 'Schöner Bericht mit Logo & QR-Code',
+    yearlyPdf: 'Jahresbericht PDF', yearlyPdfSub: '12 Monate aggregiert',
+    share: 'App teilen', shareSub: 'Link kopieren oder über Teilen-Menü',
+    csvSuccess: 'CSV erfolgreich heruntergeladen',
+    pdfSuccess: 'PDF erfolgreich generiert',
+    linkCopied: 'Link in Zwischenablage kopiert',
+    error: 'Export fehlgeschlagen',
+    hint: 'Daten bleiben lokal – kein Upload, kein Cloud-Zugriff.',
+  },
+  devices: {
+    title: 'Meine Anlagen', subtitle: '{{count}} Anlage(n) verwalten',
+    addTitle: 'Anlage hinzufügen', add: 'Hinzufügen',
+    deviceName: 'Name der Anlage', namePlaceholder: 'z.B. Südbalkon, Garagen-Dach…',
+    peakPower: 'Spitzenleistung',
+    myDevices: 'Geräteliste',
+    allTitle: 'Gesamt-Übersicht', allSub: 'Summe aller {{count}} Anlagen',
+    active: 'Aktiv', openDashboard: 'Im Dashboard öffnen',
+    changeColor: 'Farbe ändern',
+    confirmDelete: 'Löschen bestätigen',
+    cannotDeleteLast: 'Die letzte Anlage kann nicht gelöscht werden.',
+    addedToast: '"{{name}}" wurde hinzugefügt.',
+    deletedToast: 'Anlage gelöscht.',
+    countLabel: 'Anlagen', totalPeak: 'Gesamtleistung', month: 'Monat',
+    cloudHint: 'Supabase-Sync in Vorbereitung – alle Daten bleiben aktuell lokal gespeichert.',
+  },
 };
 
 const en: typeof de = {
   nav: {
     dashboard: 'Monitor', manual: 'Assembly', materials: 'Materials',
-    economics: 'Returns', hardware: 'ESP32', settings: 'Settings',
+    economics: 'Returns', hardware: 'ESP32', settings: 'Settings', devices: 'Devices',
   },
   header: { title: 'BKW Monitor' },
   dashboard: {
@@ -140,6 +168,34 @@ const en: typeof de = {
     shareTitle: 'Share App', copyCode: 'Copy', copied: 'Copied!',
   },
   economics: { title: 'Economics', subtitle: 'ROI calculator & 20-year projection' },
+  report: {
+    title: 'Export & Share',
+    csvTitle: 'CSV Export', csvSub: 'Last 30 days as Excel-compatible table',
+    monthlyPdf: 'Monthly PDF Report', monthlyPdfSub: 'Formatted report with logo & QR code',
+    yearlyPdf: 'Yearly PDF Report', yearlyPdfSub: '12 months aggregated',
+    share: 'Share App', shareSub: 'Copy link or share via system menu',
+    csvSuccess: 'CSV downloaded successfully',
+    pdfSuccess: 'PDF generated successfully',
+    linkCopied: 'Link copied to clipboard',
+    error: 'Export failed',
+    hint: 'Data stays local – no upload, no cloud access.',
+  },
+  devices: {
+    title: 'My Devices', subtitle: 'Manage {{count}} device(s)',
+    addTitle: 'Add device', add: 'Add',
+    deviceName: 'Device name', namePlaceholder: 'e.g. South Balcony, Garage roof…',
+    peakPower: 'Peak power',
+    myDevices: 'Device list',
+    allTitle: 'Total Overview', allSub: 'Sum of all {{count}} devices',
+    active: 'Active', openDashboard: 'Open in Dashboard',
+    changeColor: 'Change color',
+    confirmDelete: 'Confirm delete',
+    cannotDeleteLast: 'Cannot delete the last device.',
+    addedToast: '"{{name}}" added.',
+    deletedToast: 'Device deleted.',
+    countLabel: 'Devices', totalPeak: 'Total peak', month: 'Month',
+    cloudHint: 'Supabase sync coming soon – all data is stored locally for now.',
+  },
 };
 
 i18n

@@ -1,20 +1,28 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
+  ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Bar, BarChart,
 } from 'recharts';
-import { Zap, Sun, ArrowDownToLine, ArrowUpFromLine, Clock, TrendingUp, Sparkles, Leaf, Euro, Loader2, CloudSun, CalendarDays, AlertTriangle, Battery, BatteryCharging } from 'lucide-react';
+import { Zap, Sun, ArrowDownToLine, ArrowUpFromLine, Clock, TrendingUp, Sparkles, Leaf, Euro, Loader2, CloudSun, CalendarDays, AlertTriangle, Battery, BatteryCharging, FileDown, PlugZap } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import type { Thresholds, Notification } from '../App';
 import {
-  generateData, simulateCurrentSolar, simulateCurrentConsumption,
-  calculateSavings, calculateCO2, simulateBattery, type TimeRange, type EnergyDataPoint,
+  simulateCurrentSolar, simulateCurrentConsumption,
+  calculateCO2, simulateBattery, generateDataForDevice, aggregateDevicesData,
+  type TimeRange, type EnergyDataPoint,
 } from '../lib/simulation';
+import type { BKWDevice } from '../lib/deviceStore';
+const ReportModal = lazy(() => import('./ReportModal'));
 import { analyzeEnergyData, forecastEnergyData, hasApiKey, type ForecastInput, type DayForecast } from '../lib/gemini';
 import { fetchWeatherForecast, getWeatherCache, weatherToSolar, WeatherRateLimitError, type WeatherForecast } from '../lib/weather';
 import { fetchEsp32Data, getEsp32Url } from '../lib/esp32';
 import type { HAData } from '../lib/ha';
+import {
+  type MarketPrice, getCurrentPrice, getPriceLevel, getRetailEstimate,
+  PRICE_LEVEL_COLORS, PRICE_LEVEL_BG, PRICE_LEVEL_LABEL,
+} from '../lib/electricity';
+import { checkAlerts } from '../lib/push';
 
 interface DashboardProps {
   thresholds: Thresholds;
@@ -23,18 +31,27 @@ interface DashboardProps {
   hasBattery?: boolean;
   batteryCapacity?: number;
   haData?: HAData | null;
+  devices: BKWDevice[];
+  activeDeviceId: string;
+  onActiveDeviceChange: (id: string) => void;
+  /** Live electricity prices from aWATTar (passed from App) */
+  electricityPrices?: MarketPrice[];
 }
 
 const RANGES_KEYS: Array<{ key: TimeRange }> = [
   { key: 'daily' }, { key: 'weekly' }, { key: 'monthly' },
 ];
 
-export default function Dashboard({ thresholds, addNotification, liveMode, hasBattery = false, batteryCapacity = 5, haData }: DashboardProps) {
+export default function Dashboard({ thresholds, addNotification, liveMode, hasBattery = false, batteryCapacity = 5, haData, devices, activeDeviceId, onActiveDeviceChange, electricityPrices = [] }: DashboardProps) {
   const { t } = useTranslation();
   const [timeRange, setTimeRange] = useState<TimeRange>(() =>
     (localStorage.getItem('bkw-timerange') as TimeRange) || 'daily',
   );
-  const [data, setData] = useState<EnergyDataPoint[]>(() => generateData(timeRange));
+  const [data, setData] = useState<EnergyDataPoint[]>(() =>
+    activeDeviceId === 'all'
+      ? aggregateDevicesData(timeRange, devices.map((d) => d.id))
+      : generateDataForDevice(timeRange, activeDeviceId),
+  );
   const [currentSolar, setCurrentSolar] = useState(420);
   const [currentConsumption, setCurrentConsumption] = useState(310);
 
@@ -55,11 +72,28 @@ export default function Dashboard({ thresholds, addNotification, liveMode, hasBa
   // Live mode error
   const [liveError, setLiveError] = useState<string | null>(null);
   const [batteryPct, setBatteryPct] = useState(50);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [showPriceChart, setShowPriceChart] = useState(false);
+
+  // Derived electricity price state
+  const currentPrice = useMemo(() => getCurrentPrice(electricityPrices), [electricityPrices]);
+  const priceLevel   = useMemo(
+    () => (currentPrice ? getPriceLevel(currentPrice.priceCtKwh) : null),
+    [currentPrice],
+  );
+  const retailEstimate = useMemo(
+    () => (currentPrice ? getRetailEstimate(currentPrice.priceEurKwh) : null),
+    [currentPrice],
+  );
 
   useEffect(() => {
     localStorage.setItem('bkw-timerange', timeRange);
-    setData(generateData(timeRange));
-  }, [timeRange]);
+    setData(
+      activeDeviceId === 'all'
+        ? aggregateDevicesData(timeRange, devices.map((d) => d.id))
+        : generateDataForDevice(timeRange, activeDeviceId),
+    );
+  }, [timeRange, activeDeviceId, devices]);
 
   // Live simulation OR real ESP32 polling (skipped if haData present)
   useEffect(() => {
@@ -110,21 +144,41 @@ export default function Dashboard({ thresholds, addNotification, liveMode, hasBa
     const totalSolar = data.reduce((s, d) => s + d.solar, 0);
     const totalConsumption = data.reduce((s, d) => s + d.consumption, 0);
     const selfConsumed = data.reduce((s, d) => s + Math.min(d.solar, d.consumption), 0);
-    const peakConsumption = Math.max(...data.map((d) => d.consumption));
+    const peakSolar = Math.max(...data.map((d) => d.solar), 0);
+    const peakConsumption = Math.max(...data.map((d) => d.consumption), 0);
     const peakTime = data.find((d) => d.consumption === peakConsumption)?.time ?? '';
     const solarKwh = totalSolar / 1000;
     const selfSufficiency = totalConsumption > 0 ? Math.min(100, Math.round((selfConsumed / totalConsumption) * 100)) : 0;
+    // Use live retail estimate if available, otherwise fixed 0.30 €/kWh fallback
+    const pricePerKwh = retailEstimate ?? 0.30;
+    const savings = (solarKwh * pricePerKwh).toFixed(2);
 
     return {
       totalSolar: solarKwh.toFixed(1),
       totalConsumption: (totalConsumption / 1000).toFixed(1),
       selfSufficiency,
-      savings: calculateSavings(solarKwh).toFixed(2),
+      savings,
       co2: calculateCO2(solarKwh).toFixed(1),
       peakConsumption,
+      peakSolar,
       peakTime,
     };
-  }, [data]);
+  }, [data, retailEstimate]);
+
+  // Periodic push alert checks
+  useEffect(() => {
+    const interval = setInterval(() => {
+      checkAlerts({
+        currentSolarW: currentSolar,
+        selfSufficiency: metrics.selfSufficiency,
+        peakSolarW: metrics.peakSolar,
+        spotPriceCtKwh: currentPrice?.priceCtKwh ?? null,
+        amortizationReached: false,
+        daysToAmortization: null,
+      }).catch(() => { /* ignore if notifications unavailable */ });
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [currentSolar, metrics.selfSufficiency, metrics.peakSolar, currentPrice]);
 
   // Merge weather forecast into chart data as dashed overlay (daily view only)
   const forecastChartData = useMemo(() => {
@@ -261,6 +315,36 @@ export default function Dashboard({ thresholds, addNotification, liveMode, hasBa
 
   return (
     <div className="p-4 space-y-4 max-w-4xl mx-auto pb-24">
+      {/* Device Switcher */}
+      {devices.length > 1 && (
+        <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide -mx-1 px-1">
+          <button
+            onClick={() => onActiveDeviceChange('all')}
+            className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-all border ${
+              activeDeviceId === 'all'
+                ? 'bg-slate-800 dark:bg-white text-white dark:text-slate-900 border-transparent'
+                : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+            }`}
+          >
+            {t('devices.allTitle')}
+          </button>
+          {devices.map((d) => (
+            <button
+              key={d.id}
+              onClick={() => onActiveDeviceChange(d.id)}
+              className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all border ${
+                activeDeviceId === d.id
+                  ? 'text-white border-transparent'
+                  : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+              }`}
+              style={activeDeviceId === d.id ? { backgroundColor: d.color, borderColor: d.color } : {}}
+            >
+              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: d.color }} />
+              {d.name}
+            </button>
+          ))}
+        </div>
+      )}
       {/* Live Status Cards */}
       <div className="grid grid-cols-2 gap-3">
         <motion.div
@@ -348,7 +432,177 @@ export default function Dashboard({ thresholds, addNotification, liveMode, hasBa
             </p>
           </div>
         </div>
+        {/* Inline price badge */}
+        {currentPrice && priceLevel && (
+          <div className={`px-3 py-2 rounded-xl text-center ${PRICE_LEVEL_BG[priceLevel]}`}>
+            <p className={`text-base font-bold ${PRICE_LEVEL_COLORS[priceLevel]}`}>
+              {currentPrice.priceCtKwh.toFixed(1)} ct
+            </p>
+            <p className="text-[9px] text-slate-500 uppercase">Spotpreis</p>
+          </div>
+        )}
       </motion.div>
+
+      {/* Live Electricity Price Card */}
+      <AnimatePresence>
+        {currentPrice && priceLevel && retailEstimate !== null && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="overflow-hidden"
+          >
+            <div className={`rounded-2xl p-4 border shadow-sm ${PRICE_LEVEL_BG[priceLevel]} border-transparent`}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-white/60 dark:bg-slate-800/60 flex items-center justify-center">
+                    <PlugZap size={20} className={PRICE_LEVEL_COLORS[priceLevel]} />
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider">
+                      Live Strompreis (EPEX Spot)
+                    </p>
+                    <div className="flex items-baseline gap-2 flex-wrap">
+                      <span className={`text-2xl font-bold ${PRICE_LEVEL_COLORS[priceLevel]}`}>
+                        {currentPrice.priceCtKwh.toFixed(2)} ct/kWh
+                      </span>
+                      <span className="text-xs text-slate-500">
+                        Spotpreis · Handel: {(retailEstimate * 100).toFixed(1)} ct/kWh
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-1">
+                  <span className={`text-xs font-semibold px-2 py-1 rounded-full bg-white/50 dark:bg-slate-800/50 ${PRICE_LEVEL_COLORS[priceLevel]}`}>
+                    {PRICE_LEVEL_LABEL[priceLevel]}
+                  </span>
+                  <button
+                    onClick={() => setShowPriceChart((p) => !p)}
+                    className="text-[10px] text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 underline underline-offset-2"
+                  >
+                    {showPriceChart ? 'Chart ausblenden' : '24-h-Chart'}
+                  </button>
+                </div>
+              </div>
+
+              {/* 24-h price chart */}
+              <AnimatePresence>
+                {showPriceChart && electricityPrices.length > 0 && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    className="overflow-hidden mt-3"
+                  >
+                    <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-2">
+                      Heute & morgen – Spotpreise (ct/kWh)
+                    </p>
+                    <div className="h-24 w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={electricityPrices.map((p) => ({
+                            hour: new Date(p.startTimestamp).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }),
+                            price: parseFloat(p.priceCtKwh.toFixed(2)),
+                            isCurrent: p.startTimestamp <= Date.now() && p.endTimestamp > Date.now(),
+                          }))}
+                          margin={{ top: 2, right: 2, left: -28, bottom: 0 }}
+                          barSize={8}
+                        >
+                          <XAxis
+                            dataKey="hour"
+                            tick={{ fontSize: 9, fill: '#94a3b8' }}
+                            tickLine={false}
+                            axisLine={false}
+                            interval={3}
+                          />
+                          <YAxis
+                            tick={{ fontSize: 9, fill: '#94a3b8' }}
+                            tickLine={false}
+                            axisLine={false}
+                          />
+                          <Tooltip
+                            contentStyle={{ borderRadius: '8px', fontSize: '11px', border: '1px solid #e2e8f0' }}
+                            formatter={(v: number) => [`${v} ct/kWh`, 'Spotpreis']}
+                            labelFormatter={(l) => `${l} Uhr`}
+                          />
+                          <Bar
+                            dataKey="price"
+                            radius={[3, 3, 0, 0]}
+                            fill="#f59e0b"
+                            label={false}
+                          />
+                          <ReferenceLine
+                            y={currentPrice.priceCtKwh}
+                            stroke="#ef4444"
+                            strokeDasharray="3 3"
+                            label={{ position: 'insideTopRight', value: 'jetzt', fill: '#ef4444', fontSize: 9 }}
+                          />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Feed-in / savings banner */}
+      <AnimatePresence>
+        {currentPrice && priceLevel && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className={`rounded-2xl p-4 border flex items-center gap-3 ${
+              priceLevel === 'very-high' || priceLevel === 'high'
+                ? 'bg-amber-50 dark:bg-amber-950 border-amber-300 dark:border-amber-700'
+                : priceLevel === 'very-low'
+                ? 'bg-sky-50 dark:bg-sky-950 border-sky-300 dark:border-sky-700'
+                : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800'
+            }`}
+          >
+            <span className="text-2xl leading-none flex-shrink-0">
+              {priceLevel === 'very-high' || priceLevel === 'high' ? '💰' : priceLevel === 'very-low' ? '🔌' : '📊'}
+            </span>
+            <div>
+              {(priceLevel === 'very-high' || priceLevel === 'high') && (
+                <>
+                  <p className="text-sm font-bold text-amber-800 dark:text-amber-200">
+                    {isFeedingGrid ? 'Jetzt lohnt sich Einspeisung!' : 'Strompreis-Spitze – Eigenverbrauch maximieren!'}
+                  </p>
+                  <p className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">
+                    {isFeedingGrid
+                      ? `Spotpreis ${currentPrice.priceCtKwh.toFixed(1)} ct/kWh – deine Einspeisung ist jetzt besonders wertvoll.`
+                      : `Spotpreis ${currentPrice.priceCtKwh.toFixed(1)} ct/kWh – Großverbraucher wenn möglich verschieben.`}
+                  </p>
+                </>
+              )}
+              {priceLevel === 'very-low' && (
+                <>
+                  <p className="text-sm font-bold text-sky-800 dark:text-sky-200">
+                    Günstiger Strom – guter Zeitpunkt für hohen Verbrauch
+                  </p>
+                  <p className="text-xs text-sky-700 dark:text-sky-300 mt-0.5">
+                    Spotpreis {currentPrice.priceCtKwh.toFixed(1)} ct/kWh – Waschmaschine, Laden, Spülmaschine jetzt!
+                  </p>
+                </>
+              )}
+              {(priceLevel === 'low' || priceLevel === 'medium') && (
+                <>
+                  <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                    Normales Preisniveau
+                  </p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Spotpreis {currentPrice.priceCtKwh.toFixed(1)} ct/kWh · Handel~{(retailEstimate! * 100).toFixed(1)} ct / kWh
+                  </p>
+                </>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* CO₂ & € Savings Row */}
       <div className="grid grid-cols-3 gap-3">
@@ -410,6 +664,14 @@ export default function Dashboard({ thresholds, addNotification, liveMode, hasBa
             <TrendingUp className="text-emerald-600" size={18} />
             {t('dashboard.history')}
           </h3>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowReportModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+            >
+              <FileDown size={13} />
+              {t('report.csvTitle')}
+            </button>
           <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-lg w-full sm:w-auto">
             {RANGES_KEYS.map((r) => (
               <button
@@ -424,6 +686,7 @@ export default function Dashboard({ thresholds, addNotification, liveMode, hasBa
                 {t(`dashboard.${r.key === 'daily' ? 'day' : r.key === 'weekly' ? 'week' : 'month'}`)}
               </button>
             ))}
+          </div>
           </div>
         </div>
 
@@ -631,6 +894,22 @@ export default function Dashboard({ thresholds, addNotification, liveMode, hasBa
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Report Modal */}
+      <Suspense fallback={null}>
+        {showReportModal && (
+          <ReportModal
+            data={data}
+            deviceName={
+              activeDeviceId === 'all'
+                ? t('devices.allTitle')
+                : (devices.find((d) => d.id === activeDeviceId)?.name ?? 'Anlage')
+            }
+            deviceId={activeDeviceId === 'all' ? 'default' : activeDeviceId}
+            onClose={() => setShowReportModal(false)}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }

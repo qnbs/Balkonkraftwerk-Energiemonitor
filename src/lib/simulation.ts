@@ -1,3 +1,5 @@
+import { deviceFactor } from './deviceStore';
+
 export type TimeRange = 'daily' | 'weekly' | 'monthly';
 
 export interface EnergyDataPoint {
@@ -8,7 +10,9 @@ export interface EnergyDataPoint {
   grid: number;
 }
 
-/** Realistic balcony PV simulation: 0-850W solar based on time of day & weather randomness */
+// ---------------------------------------------------------------------------
+// Base data generation (random, for single-device / default)
+// ---------------------------------------------------------------------------
 export function generateData(range: TimeRange): EnergyDataPoint[] {
   const data: EnergyDataPoint[] = [];
 
@@ -112,3 +116,51 @@ export function simulateBattery(
   const deltaPct = (deltaKwh / capacityKwh) * 100;
   return Math.max(0, Math.min(100, prevPct + deltaPct));
 }
+
+// ---------------------------------------------------------------------------
+// Multi-device support
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate chart data scaled to a specific device's capacity factor.
+ * Each device gets a deterministic multiplication factor based on its ID,
+ * giving visually distinct but realistic data.
+ */
+export function generateDataForDevice(range: TimeRange, deviceId: string): EnergyDataPoint[] {
+  const factor = deviceFactor(deviceId);
+  return generateData(range).map((p) => {
+    const solar = Math.round(p.solar * factor);
+    return {
+      ...p,
+      solar,
+      unused: Math.round(Math.max(0, solar - p.consumption)),
+      grid: Math.round(Math.max(0, p.consumption - solar)),
+    };
+  });
+}
+
+/**
+ * Aggregate (sum) data from multiple devices for the "all devices" overview.
+ */
+export function aggregateDevicesData(
+  range: TimeRange,
+  deviceIds: string[],
+): EnergyDataPoint[] {
+  if (deviceIds.length === 0) return generateData(range);
+  if (deviceIds.length === 1) return generateDataForDevice(range, deviceIds[0]);
+
+  const datasets = deviceIds.map((id) => generateDataForDevice(range, id));
+  const base = datasets[0];
+  return base.map((point, i) => {
+    const solar = datasets.reduce((s, d) => s + (d[i]?.solar ?? 0), 0);
+    const consumption = datasets.reduce((s, d) => s + (d[i]?.consumption ?? 0), 0);
+    return {
+      time: point.time,
+      solar,
+      consumption,
+      unused: Math.max(0, solar - consumption),
+      grid: Math.max(0, consumption - solar),
+    };
+  });
+}
+

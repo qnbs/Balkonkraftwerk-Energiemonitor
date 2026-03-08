@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
-import { Activity, BookOpen, Wrench, Settings as SettingsIcon, Bell, X, Sun, Moon, Zap, TrendingUp, Cpu } from 'lucide-react';
+import { Activity, BookOpen, Settings as SettingsIcon, Bell, X, Sun, Moon, Zap, TrendingUp, Cpu, LayoutGrid, HelpCircle } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useTransform, type PanInfo } from 'motion/react';
 import { Toaster, toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
@@ -9,13 +9,15 @@ import { LanguageSwitcher } from './components/ui/LanguageSwitcher';
 import { getStoredTheme, setStoredTheme, type Theme } from './lib/theme';
 import { isLiveMode, setLiveMode } from './lib/esp32';
 import { HAClient, getStoredHAConfig, type HAStatus, type HAData } from './lib/ha';
+import { loadDevices, saveDevices, type BKWDevice } from './lib/deviceStore';
+import { fetchElectricityPrices, getElectricityCache, type MarketPrice } from './lib/electricity';
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
-const Manual = lazy(() => import('./components/Manual'));
-const Materials = lazy(() => import('./components/Materials'));
+const Help = lazy(() => import('./components/Help'));
 const Settings = lazy(() => import('./components/Settings'));
 const Economics = lazy(() => import('./components/Economics'));
 const Hardware = lazy(() => import('./components/Hardware'));
+const DeviceManager = lazy(() => import('./components/DeviceManager'));
 
 export type Notification = {
   id: string;
@@ -33,12 +35,12 @@ export type Thresholds = {
 };
 
 const tabs = [
-  { id: 'dashboard', label: 'Monitor', icon: Activity },
-  { id: 'manual', label: 'Montage', icon: BookOpen },
-  { id: 'materials', label: 'Material', icon: Wrench },
-  { id: 'economics', label: 'Rendite', icon: TrendingUp },
-  { id: 'hardware', label: 'ESP32', icon: Cpu },
-  { id: 'settings', label: 'Setup', icon: SettingsIcon },
+  { id: 'dashboard', label: 'Monitor',  icon: Activity },
+  { id: 'economics', label: 'Rendite',  icon: TrendingUp },
+  { id: 'hardware',  label: 'ESP32',    icon: Cpu },
+  { id: 'devices',   label: 'Anlagen',  icon: LayoutGrid },
+  { id: 'help',      label: 'Hilfe',    icon: HelpCircle },
+  { id: 'settings',  label: 'Setup',    icon: SettingsIcon },
 ] as const;
 
 type TabId = (typeof tabs)[number]['id'];
@@ -61,6 +63,27 @@ export default function App() {
   const haClientRef = useRef<HAClient | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [swipeDirection, setSwipeDirection] = useState<1 | -1>(1);
+
+  // Live electricity prices (aWATTar Germany)
+  const [electricityPrices, setElectricityPrices] = useState<MarketPrice[]>(
+    () => getElectricityCache() ?? [],
+  );
+
+  // Multi-device state
+  const [devices, setDevices] = useState<BKWDevice[]>(loadDevices);
+  const [activeDeviceId, setActiveDeviceId] = useState<string>(
+    () => localStorage.getItem('bkw-active-device') ?? loadDevices()[0]?.id ?? 'default',
+  );
+
+  const handleDevicesChange = useCallback((updated: BKWDevice[]) => {
+    saveDevices(updated);
+    setDevices(updated);
+  }, []);
+
+  const handleActiveDeviceChange = useCallback((id: string) => {
+    setActiveDeviceId(id);
+    localStorage.setItem('bkw-active-device', id);
+  }, []);
 
   const handleLiveModeChange = (v: boolean) => {
     setLiveMode(v);
@@ -93,6 +116,18 @@ export default function App() {
     localStorage.setItem('bkw-has-battery', String(hasBattery));
     localStorage.setItem('bkw-battery-capacity', String(batteryCapacity));
   }, [hasBattery, batteryCapacity]);
+
+  // Fetch live electricity prices (aWATTar DE) – refresh every 60 min
+  useEffect(() => {
+    const load = () => {
+      fetchElectricityPrices()
+        .then(setElectricityPrices)
+        .catch(() => { /* stay with cached data if offline */ });
+    };
+    load();
+    const id = setInterval(load, 60 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
 
   // Update html lang/dir on language change
   useEffect(() => {
@@ -378,11 +413,21 @@ export default function App() {
               transition={{ duration: 0.2, ease: 'easeInOut' }}
             >
               <Suspense fallback={<DashboardSkeleton />}>
-                {activeTab === 'dashboard' && <Dashboard liveMode={liveMode} hasBattery={hasBattery} batteryCapacity={batteryCapacity} haData={haData} thresholds={thresholds} addNotification={addNotification} />}
-                {activeTab === 'manual' && <Manual />}
-                {activeTab === 'materials' && <Materials />}
+                {activeTab === 'dashboard' && <Dashboard liveMode={liveMode} hasBattery={hasBattery} batteryCapacity={batteryCapacity} haData={haData} thresholds={thresholds} addNotification={addNotification} devices={devices} activeDeviceId={activeDeviceId} onActiveDeviceChange={handleActiveDeviceChange} electricityPrices={electricityPrices} />}
+                {activeTab === 'help' && <Help />}
                 {activeTab === 'economics' && <Economics />}
                 {activeTab === 'hardware' && <Hardware liveMode={liveMode} onLiveModeChange={handleLiveModeChange} />}
+                {activeTab === 'devices' && (
+                  <DeviceManager
+                    devices={devices}
+                    activeDeviceId={activeDeviceId}
+                    onDevicesChange={handleDevicesChange}
+                    onActiveDeviceChange={(id) => {
+                      handleActiveDeviceChange(id);
+                      navigateTab('dashboard');
+                    }}
+                  />
+                )}
                 {activeTab === 'settings' && (
                   <Settings
                     thresholds={thresholds}

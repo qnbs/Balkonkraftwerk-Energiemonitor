@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Save, AlertTriangle, Zap, BellRing, Key, Moon, Sun, Shield, ExternalLink, Globe, Battery, Home, Wifi, WifiOff, Bell } from 'lucide-react';
+import { Save, AlertTriangle, Zap, BellRing, Key, Moon, Sun, Shield, ExternalLink, Globe, Battery, Home, Bell, PlugZap, TestTube2, Wifi, WifiOff } from 'lucide-react';
 import { motion } from 'motion/react';
 import { toast } from 'sonner';
 import type { Thresholds } from '../App';
 import type { Theme } from '../lib/theme';
 import { getStoredApiKey, setStoredApiKey, hasApiKey } from '../lib/gemini';
-import { getStoredHAConfig, setStoredHAConfig, DEFAULT_HA_CONFIG, type HAConfig, type HAStatus } from '../lib/ha';
+import { getStoredHAConfig, setStoredHAConfig, type HAConfig, type HAStatus } from '../lib/ha';
+import { getAlertPrefs, saveAlertPrefs, showBrowserNotification, type AlertPreferences } from '../lib/push';
 
 interface SettingsProps {
   thresholds: Thresholds;
@@ -36,6 +37,7 @@ export default function Settings({
   const [notifPerm, setNotifPerm] = useState<NotificationPermission>(() =>
     'Notification' in window ? Notification.permission : 'denied',
   );
+  const [alertPrefs, setAlertPrefs] = useState<AlertPreferences>(getAlertPrefs);
 
   useEffect(() => { setLocalThresholds(thresholds); }, [thresholds]);
 
@@ -61,6 +63,24 @@ export default function Settings({
     const perm = await Notification.requestPermission();
     setNotifPerm(perm);
     if (perm === 'granted') toast.success(t('settings.pushEnabled'));
+  };
+
+  const handleSaveAlerts = () => {
+    saveAlertPrefs(alertPrefs);
+    toast.success('Alarm-Einstellungen gespeichert');
+  };
+
+  const handleTestNotification = async () => {
+    if (notifPerm !== 'granted') {
+      toast.error('Notifications erst aktivieren');
+      return;
+    }
+    await showBrowserNotification(
+      '✅ Test-Benachrichtigung',
+      'Push-Notifications funktionieren korrekt!',
+      'test',
+    );
+    toast.success('Test-Notification gesendet');
   };
 
   const haStatusColor = haStatus === 'connected'
@@ -190,7 +210,7 @@ export default function Settings({
           <Bell size={18} className="text-rose-500" />
           {t('settings.pushTitle')}
         </h2>
-        <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-xl">
+        <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-xl mb-3">
           <div>
             <p className="text-sm font-medium">{t('settings.pushStatus')}</p>
             <p className={`text-xs mt-0.5 ${
@@ -199,16 +219,109 @@ export default function Settings({
               {notifPerm === 'granted' ? t('settings.pushGranted') : notifPerm === 'denied' ? t('settings.pushDenied') : t('settings.pushDefault')}
             </p>
           </div>
-          {notifPerm !== 'granted' && (
-            <button
-              onClick={handleEnablePush}
-              disabled={notifPerm === 'denied'}
-              className="px-4 py-2 rounded-lg text-sm font-medium bg-rose-500 text-white hover:bg-rose-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-            >
-              {t('settings.pushEnable')}
-            </button>
-          )}
+          <div className="flex gap-2">
+            {notifPerm === 'granted' && (
+              <button
+                onClick={handleTestNotification}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-300 dark:hover:bg-slate-600 transition-all"
+              >
+                <TestTube2 size={14} />
+                Test
+              </button>
+            )}
+            {notifPerm !== 'granted' && (
+              <button
+                onClick={handleEnablePush}
+                disabled={notifPerm === 'denied'}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-rose-500 text-white hover:bg-rose-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                {t('settings.pushEnable')}
+              </button>
+            )}
+          </div>
         </div>
+
+        {/* Alert type toggles */}
+        {notifPerm === 'granted' && (
+          <div className="space-y-3">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Alarm-Typen</p>
+
+            {([
+              { key: 'peakProduction' as const, icon: '☀️', label: 'Peak-Erzeugung', desc: 'Wenn Anlage auf Volllast läuft' },
+              { key: 'lowAutarky' as const, icon: '⚡', label: 'Niedrige Autarkie', desc: `Autarkie unter ${alertPrefs.lowAutarkyThreshold} %` },
+              { key: 'amortization' as const, icon: '🎉', label: 'Amortisation erreicht', desc: 'Einmalige Meilenstein-Benachrichtigung' },
+              { key: 'pricePeak' as const, icon: '💰', label: 'Strompreis-Alarm', desc: `Preis > ${alertPrefs.pricePeakThresholdCtKwh} ct oder < ${alertPrefs.priceLowThresholdCtKwh} ct` },
+            ] as const).map(({ key, icon, label, desc }) => (
+              <div key={key} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-xl">
+                <div className="flex items-center gap-2">
+                  <span className="text-base leading-none">{icon}</span>
+                  <div>
+                    <p className="text-sm font-medium">{label}</p>
+                    <p className="text-xs text-slate-500">{desc}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setAlertPrefs((p) => ({ ...p, [key]: !p[key] }))}
+                  className={`relative w-10 h-6 rounded-full transition-colors ${alertPrefs[key] ? 'bg-emerald-500' : 'bg-slate-300'}`}
+                  role="switch"
+                  aria-checked={alertPrefs[key]}
+                >
+                  <motion.span
+                    className="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow-sm"
+                    animate={{ x: alertPrefs[key] ? 16 : 0 }}
+                    transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+                  />
+                </button>
+              </div>
+            ))}
+
+            {/* Threshold sliders */}
+            <div className="bg-slate-50 dark:bg-slate-800 rounded-xl p-4 space-y-4">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-medium flex items-center gap-1.5">
+                    <PlugZap size={13} className="text-amber-500" />
+                    Preis-Alarm ab (ct/kWh)
+                  </label>
+                  <span className="font-mono text-xs bg-white dark:bg-slate-700 px-2 py-0.5 rounded border border-slate-200 dark:border-slate-600">
+                    {alertPrefs.pricePeakThresholdCtKwh} ct
+                  </span>
+                </div>
+                <input
+                  type="range" min="5" max="40" step="1"
+                  value={alertPrefs.pricePeakThresholdCtKwh}
+                  onChange={(e) => setAlertPrefs((p) => ({ ...p, pricePeakThresholdCtKwh: Number(e.target.value) }))}
+                  className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-medium flex items-center gap-1.5">
+                    <Zap size={13} className="text-emerald-500" />
+                    Autarkie-Alarm unter (%)
+                  </label>
+                  <span className="font-mono text-xs bg-white dark:bg-slate-700 px-2 py-0.5 rounded border border-slate-200 dark:border-slate-600">
+                    {alertPrefs.lowAutarkyThreshold} %
+                  </span>
+                </div>
+                <input
+                  type="range" min="10" max="90" step="5"
+                  value={alertPrefs.lowAutarkyThreshold}
+                  onChange={(e) => setAlertPrefs((p) => ({ ...p, lowAutarkyThreshold: Number(e.target.value) }))}
+                  className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                />
+              </div>
+            </div>
+
+            <button
+              onClick={handleSaveAlerts}
+              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium bg-rose-500 text-white hover:bg-rose-600 transition-all"
+            >
+              <BellRing size={15} />
+              Alarm-Einstellungen speichern
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Battery Storage */}
