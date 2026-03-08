@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Save, AlertTriangle, Zap, BellRing, Key, Moon, Sun, Shield, ExternalLink, Globe, Battery, Home, Bell, PlugZap, TestTube2, Wifi, WifiOff } from 'lucide-react';
+import { Save, AlertTriangle, Zap, BellRing, Key, Moon, Sun, Shield, ExternalLink, Globe, Battery, Home, Bell, PlugZap, TestTube2, Wifi, WifiOff, Share2 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { toast } from 'sonner';
 import type { Thresholds } from '../App';
 import type { Theme } from '../lib/theme';
 import { getStoredApiKey, setStoredApiKey, hasApiKey } from '../lib/gemini';
 import { getStoredHAConfig, setStoredHAConfig, type HAConfig, type HAStatus } from '../lib/ha';
+import { getStoredMQTTConfig, setStoredMQTTConfig, type MQTTConfig, type MQTTStatus } from '../lib/mqtt';
 import { getAlertPrefs, saveAlertPrefs, showBrowserNotification, type AlertPreferences } from '../lib/push';
 
 interface SettingsProps {
@@ -21,12 +22,16 @@ interface SettingsProps {
   haStatus: HAStatus;
   onHaConnect: () => void;
   onHaDisconnect: () => void;
+  mqttStatus: MQTTStatus;
+  onMqttConnect: () => void;
+  onMqttDisconnect: () => void;
 }
 
 export default function Settings({
   thresholds, setThresholds, theme, toggleTheme,
   hasBattery, onHasBatteryChange, batteryCapacity, onBatteryCapacityChange,
   haStatus, onHaConnect, onHaDisconnect,
+  mqttStatus, onMqttConnect, onMqttDisconnect,
 }: SettingsProps) {
   const { t, i18n } = useTranslation();
   const [localThresholds, setLocalThresholds] = useState<Thresholds>(thresholds);
@@ -34,6 +39,7 @@ export default function Settings({
   const [apiKey, setApiKey] = useState(getStoredApiKey);
   const [keySaved, setKeySaved] = useState(false);
   const [haConfig, setHaConfig] = useState<HAConfig>(getStoredHAConfig);
+  const [mqttConfig, setMqttConfig] = useState<MQTTConfig>(getStoredMQTTConfig);
   const [notifPerm, setNotifPerm] = useState<NotificationPermission>(() =>
     'Notification' in window ? Notification.permission : 'denied',
   );
@@ -56,6 +62,11 @@ export default function Settings({
   const handleSaveHaConfig = () => {
     setStoredHAConfig(haConfig);
     toast.success(t('settings.haSaved'));
+  };
+
+  const handleSaveMqttConfig = () => {
+    setStoredMQTTConfig(mqttConfig);
+    toast.success('MQTT-Einstellungen gespeichert');
   };
 
   const handleEnablePush = async () => {
@@ -88,6 +99,14 @@ export default function Settings({
     : haStatus === 'connecting'
     ? 'text-amber-500'
     : haStatus === 'error'
+    ? 'text-rose-600'
+    : 'text-slate-400';
+
+  const mqttStatusColor = mqttStatus === 'connected'
+    ? 'text-emerald-600'
+    : mqttStatus === 'connecting'
+    ? 'text-amber-500'
+    : mqttStatus === 'error'
     ? 'text-rose-600'
     : 'text-slate-400';
 
@@ -445,6 +464,115 @@ export default function Settings({
               >
                 <WifiOff size={14} />
                 {t('settings.haDisconnect')}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* MQTT */}
+      <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 shadow-sm border border-slate-100 dark:border-slate-800">
+        <h2 className="text-base font-bold mb-4 flex items-center gap-2">
+          <Share2 size={18} className="text-teal-500" />
+          MQTT-Broker
+          <span className={`ml-auto text-xs font-normal ${mqttStatusColor}`}>
+            {mqttStatus === 'connected' ? '● Verbunden'
+              : mqttStatus === 'connecting' ? '○ Verbinde…'
+              : mqttStatus === 'error' ? '✕ Fehler'
+              : '○ Getrennt'}
+          </span>
+        </h2>
+        <div className="bg-teal-50 dark:bg-teal-950 border border-teal-200 dark:border-teal-800 rounded-xl p-3 mb-4 text-xs text-teal-700 dark:text-teal-300 leading-relaxed">
+          <p className="font-semibold mb-1">WebSocket-Transport</p>
+          <p>Der Browser verbindet sich per <code className="font-mono bg-teal-100 dark:bg-teal-900 px-1 rounded">ws://</code> direkt zum MQTT-Broker.
+          Mosquitto (Port 9001) oder der HA-Mosquitto-Add-on unterstützen dies out-of-the-box.</p>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+              Broker-URL (WebSocket)
+            </label>
+            <input
+              type="url"
+              value={mqttConfig.brokerUrl}
+              onChange={(e) => setMqttConfig({ ...mqttConfig, brokerUrl: e.target.value })}
+              placeholder="ws://homeassistant.local:9001"
+              className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent font-mono"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                Benutzername
+              </label>
+              <input
+                type="text"
+                value={mqttConfig.username}
+                onChange={(e) => setMqttConfig({ ...mqttConfig, username: e.target.value })}
+                placeholder="(optional)"
+                autoComplete="username"
+                className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                Passwort
+              </label>
+              <input
+                type="password"
+                value={mqttConfig.password}
+                onChange={(e) => setMqttConfig({ ...mqttConfig, password: e.target.value })}
+                placeholder="(optional)"
+                autoComplete="current-password"
+                className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+              />
+            </div>
+          </div>
+          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest pt-1">
+            Topic-Konfiguration
+          </p>
+          {([
+            { key: 'topicSolar',   label: 'Solar (W)',    ph: 'bkw/energy/solar_w' },
+            { key: 'topicLoad',    label: 'Verbrauch (W)',ph: 'bkw/energy/consumption_w' },
+            { key: 'topicBattery', label: 'Batterie (%)', ph: 'bkw/energy/battery_pct' },
+            { key: 'topicGrid',    label: 'Netz (W)',     ph: 'bkw/energy/grid_w' },
+          ] as const).map(({ key, label, ph }) => (
+            <div key={key}>
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                {label}
+              </label>
+              <input
+                type="text"
+                value={mqttConfig[key]}
+                onChange={(e) => setMqttConfig({ ...mqttConfig, [key]: e.target.value })}
+                placeholder={ph}
+                className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent font-mono"
+              />
+            </div>
+          ))}
+          <div className="flex gap-3 pt-1">
+            <button
+              onClick={handleSaveMqttConfig}
+              className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+            >
+              <Save size={14} />
+              Speichern
+            </button>
+            {mqttStatus === 'disconnected' || mqttStatus === 'error' ? (
+              <button
+                onClick={onMqttConnect}
+                className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium bg-teal-500 text-white hover:bg-teal-600 transition-all"
+              >
+                <Wifi size={14} />
+                Verbinden
+              </button>
+            ) : (
+              <button
+                onClick={onMqttDisconnect}
+                className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium bg-slate-500 text-white hover:bg-slate-600 transition-all"
+              >
+                <WifiOff size={14} />
+                Trennen
               </button>
             )}
           </div>

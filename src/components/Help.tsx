@@ -2,7 +2,7 @@ import { useState } from 'react';
 import {
   CheckCircle2, ChevronRight, Info, AlertTriangle, ShieldAlert, Code2, Wifi,
   Cpu, Monitor, Wrench, Plug, Radio, CheckSquare, Square, ExternalLink, Calculator,
-  Zap, Box, BookOpen, Package,
+  Zap, Box, BookOpen, Package, Share2, Home, Server, ChevronDown,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -391,10 +391,241 @@ function MaterialsList() {
 }
 
 // ---------------------------------------------------------------------------
+// Integrations guide data
+// ---------------------------------------------------------------------------
+
+interface IntSection {
+  title: string;
+  icon: React.ReactNode;
+  color: string;
+  subsections: { heading: string; body: string; code?: string }[];
+}
+
+const MOSQUITTO_CFG = `# /etc/mosquitto/conf.d/websockets.conf
+listener 1883          # TCP – für ESP32 (PubSubClient)
+listener 9001          # WebSocket – für Browser / App
+protocol websockets
+allow_anonymous false
+password_file /etc/mosquitto/passwd`;
+
+const HA_MQTT_SENSORS = `# configuration.yaml  (oder mqtt.yaml bei include)
+mqtt:
+  sensor:
+    - name: "BKW Solar"
+      unique_id: bkw_solar
+      state_topic: "bkw/energy/solar_w"
+      unit_of_measurement: "W"
+      device_class: power
+      state_class: measurement
+
+    - name: "BKW Verbrauch"
+      unique_id: bkw_load
+      state_topic: "bkw/energy/consumption_w"
+      unit_of_measurement: "W"
+      device_class: power
+      state_class: measurement
+
+    - name: "BKW Netz"
+      unique_id: bkw_grid
+      state_topic: "bkw/energy/grid_w"
+      unit_of_measurement: "W"
+      device_class: power
+      state_class: measurement
+
+    - name: "BKW Batterie"
+      unique_id: bkw_battery
+      state_topic: "bkw/energy/battery_pct"
+      unit_of_measurement: "%"
+      device_class: battery
+      state_class: measurement`;
+
+const HA_WS_GUIDE = `# Long-lived access token erzeugen:
+# Profil → Sicherheit → Long-Lived Access Tokens → Token erstellen
+#
+# WebSocket-URL:
+#   ws://homeassistant.local:8123/api/websocket
+#   (im lokalen Netz, kein Cloud-Relay nötig)
+#
+# Entity-IDs analog zu den MQTT-Sensor-Namen oben:
+#   sensor.bkw_solar    →  Feld "Solar-Entität"
+#   sensor.bkw_load     →  Feld "Verbrauchs-Entität"
+#   sensor.bkw_battery  →  Feld "Batterie-Entität"`;
+
+const intSections: IntSection[] = [
+  {
+    title: 'MQTT-Broker einrichten',
+    icon: <Server size={18} />,
+    color: 'teal',
+    subsections: [
+      {
+        heading: 'Option A – Mosquitto direkt (Linux/Pi)',
+        body: `1. Installieren: sudo apt install mosquitto mosquitto-clients\n2. Benutzer anlegen: sudo mosquitto_passwd -c /etc/mosquitto/passwd bkw\n3. Konfigurationsdatei anlegen (siehe Code unten)\n4. Neustart: sudo systemctl restart mosquitto\n5. Test: mosquitto_sub -h localhost -t bkw/# -v`,
+        code: MOSQUITTO_CFG,
+      },
+      {
+        heading: 'Option B – Home Assistant Mosquitto Add-on',
+        body: `1. HA → Einstellungen → Add-ons → Mosquitto Broker installieren\n2. Add-on starten (WebSocket-Port 9001 ist bereits aktiv)\n3. HA-Benutzer für MQTT anlegen: Einstellungen → Personen → Benutzer\n4. Broker-URL in der App: ws://<HA-IP>:9001`,
+      },
+      {
+        heading: 'Option C – Cloud-Broker (Test & Demo)',
+        body: `Für schnelle Tests ohne lokale Installation:\n• broker.hivemq.com:8000 (WS, anonym, öffentlich)\n• test.mosquitto.org:8080 (WS, anonym, öffentlich)\n\nHinweis: Keine Produktionsdaten auf öffentliche Broker senden!`,
+      },
+    ],
+  },
+  {
+    title: 'Home Assistant WebSocket-API',
+    icon: <Home size={18} />,
+    color: 'orange',
+    subsections: [
+      {
+        heading: 'Long-Lived Access Token & Entity-IDs',
+        body: `Die App verbindet sich direkt per WebSocket mit der HA-API – kein Cloud-Relay, kein Add-on nötig.\n\nVoraussetzung: HA im lokalen Netz erreichbar (gleiche SSID wie Browser).`,
+        code: HA_WS_GUIDE,
+      },
+      {
+        heading: 'MQTT-Sensoren in HA anlegen',
+        body: `Wenn der ESP32 per MQTT publiziert, werden die Daten automatisch als Entitäten in HA verfügbar. Danach können diese per WebSocket abonniert werden:`,
+        code: HA_MQTT_SENSORS,
+      },
+      {
+        heading: 'Tipp: API per WLAN sichern',
+        body: `• Token niemals im Browser-Verlauf oder URL speichern.\n• HA von außen nur über Nabu Casa oder Reverse-Proxy mit HTTPS/TLS.\n• \"Langzeit-Token\" nach Gebrauch widerrufen.`,
+      },
+    ],
+  },
+  {
+    title: 'ESP32-Firmware flashen',
+    icon: <Cpu size={18} />,
+    color: 'amber',
+    subsections: [
+      {
+        heading: 'Arduino IDE einrichten',
+        body: `1. Arduino IDE 2 installieren: arduino.cc/en/software\n2. Board hinzufügen: Datei → Einstellungen → Boardverwalter-URLs:\n   https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json\n3. Tools → Board → Boardverwaltung → "esp32" suchen → installieren\n4. Board wählen: "ESP32 Dev Module"`,
+      },
+      {
+        heading: 'Bibliotheken installieren (v2 HTTP)',
+        body: `Sketch → Bibliothek einbinden → Bibliotheken verwalten:\n• ESPAsyncWebServer  (Suche: "ESPAsyncWebServer dvarrel")\n• ArduinoJson        (Suche: "ArduinoJson benoit"  → >= 7.0.0)\n\nCode: ESP32-Tab → "v2 · HTTP-Poll" → Kopieren → in Arduino IDE einfügen`,
+      },
+      {
+        heading: 'Bibliotheken installieren (v3 MQTT)',
+        body: `Zusätzlich zu den v2-Bibliotheken:\n• PubSubClient  (Suche: "PubSubClient knolleary"  → >= 2.8.0)\n\nCode: ESP32-Tab → "v3 · MQTT-Push" → Kopieren → in Arduino IDE einfügen`,
+      },
+      {
+        heading: 'Flashen',
+        body: `1. ESP32 per USB-C anschließen\n2. Port wählen: Tools → Port → /dev/ttyUSB0 (Linux) oder COM3 (Windows)\n3. Upload-Geschwindigkeit: 921600\n4. Sketch hochladen → Serieller Monitor (115200 Baud) öffnen\n5. IP-Adresse notieren und in der App unter "ESP32 → URL" eintragen`,
+      },
+    ],
+  },
+  {
+    title: 'Topic-Struktur & Datenformat',
+    icon: <Share2 size={18} />,
+    color: 'violet',
+    subsections: [
+      {
+        heading: 'Standard-Topics (ESP32 v3)',
+        body: `Alle Werte werden als UTF-8-Strings (Float) retained publiziert:\n\nbkw/energy/solar_w        → aktuelle Solarleistung (W)\nbkw/energy/consumption_w  → Haushaltsverbrauch (W)\nbkw/energy/grid_w         → Netzbezug (pos.) / Einspeisung (neg.) (W)\nbkw/energy/battery_pct    → Batterieladung (%)\nbkw/energy/uptime_s       → Betriebszeit in Sekunden\nbkw/energy/ip             → IP-Adresse des ESP32\nbkw/status                → "online" / "offline" (Last Will)\n\nBeispiel: mosquitto_pub -h localhost -t bkw/energy/solar_w -m "423.5"`,
+      },
+      {
+        heading: 'HTTP-Fallback (ESP32 v2 & v3)',
+        body: `GET http://<ESP32-IP>/energy\n\nAntwort (JSON):\n{\n  "solar_w":       423.5,\n  "consumption_w": 310.0,\n  "grid_w":       -113.5,\n  "uptime_s":      3600,\n  "ip":            "192.168.1.100",\n  "age_ms":        250\n}\n\nCORS-Header sind gesetzt – direktes Polling aus dem Browser möglich.`,
+      },
+    ],
+  },
+];
+
+// ---------------------------------------------------------------------------
+// IntegrationsGuide component
+// ---------------------------------------------------------------------------
+
+function IntegrationsGuide() {
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const colorClasses: Record<string, { bg: string; border: string; icon: string; badge: string }> = {
+    teal:   { bg: 'bg-teal-50 dark:bg-teal-950',   border: 'border-teal-200 dark:border-teal-800',   icon: 'text-teal-600',   badge: 'bg-teal-100 dark:bg-teal-900 text-teal-700 dark:text-teal-300' },
+    orange: { bg: 'bg-orange-50 dark:bg-orange-950',border: 'border-orange-200 dark:border-orange-800',icon: 'text-orange-500',badge: 'bg-orange-100 dark:bg-orange-900 text-orange-700 dark:text-orange-300' },
+    amber:  { bg: 'bg-amber-50 dark:bg-amber-950',  border: 'border-amber-200 dark:border-amber-800', icon: 'text-amber-600',  badge: 'bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300' },
+    violet: { bg: 'bg-violet-50 dark:bg-violet-950',border: 'border-violet-200 dark:border-violet-800',icon: 'text-violet-600',badge: 'bg-violet-100 dark:bg-violet-900 text-violet-700 dark:text-violet-300' },
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Intro note */}
+      <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-2xl p-4 text-xs text-blue-700 dark:text-blue-300 leading-relaxed">
+        <p className="font-bold text-sm mb-1 flex items-center gap-2">
+          <Info size={15} />
+          Zwei Wege zur Smart-Home-Integration
+        </p>
+        <p><strong>MQTT</strong> – ESP32 publiziert Messwerte direkt an einen Broker. Die App abonniert dieselben Topics im Browser via WebSocket. Ideal für Home Assistant, Node-RED, etc.</p>
+        <p className="mt-1"><strong>HA WebSocket</strong> – Die App verbindet sich direkt zur Home Assistant API und liest Entitätswerte in Echtzeit. Kein MQTT nötig, wenn HA bereits läuft.</p>
+      </div>
+
+      {intSections.map((section) => {
+        const cls = colorClasses[section.color] ?? colorClasses['teal'];
+        const isOpen = expanded === section.title;
+        return (
+          <div
+            key={section.title}
+            className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 overflow-hidden"
+          >
+            <button
+              onClick={() => setExpanded(isOpen ? null : section.title)}
+              className="w-full flex items-center gap-3 p-4 text-left hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
+              aria-expanded={isOpen}
+            >
+              <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${cls.bg} ${cls.icon}`}>
+                {section.icon}
+              </div>
+              <span className="flex-1 text-sm font-semibold text-slate-800 dark:text-slate-100">
+                {section.title}
+              </span>
+              <ChevronDown
+                size={16}
+                className={`text-slate-400 transition-transform shrink-0 ${isOpen ? 'rotate-180' : ''}`}
+              />
+            </button>
+
+            <AnimatePresence initial={false}>
+              {isOpen && (
+                <motion.div
+                  key="body"
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="overflow-hidden border-t border-slate-100 dark:border-slate-800"
+                >
+                  <div className="p-4 space-y-4">
+                    {section.subsections.map((sub, i) => (
+                      <div key={i}>
+                        <p className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1">{sub.heading}</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 whitespace-pre-line leading-relaxed mb-2">
+                          {sub.body}
+                        </p>
+                        {sub.code && (
+                          <div className="bg-slate-900 dark:bg-slate-950 rounded-xl p-3 overflow-x-auto">
+                            <pre className="text-[10px] font-mono text-emerald-400 leading-relaxed whitespace-pre">
+                              {sub.code}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Help  –  root export
 // ---------------------------------------------------------------------------
 
-type HelpTab = 'guide' | 'materials';
+type HelpTab = 'guide' | 'materials' | 'integrations';
 
 export default function Help() {
   const [tab, setTab] = useState<HelpTab>('guide');
@@ -405,7 +636,7 @@ export default function Help() {
       <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 shadow-sm border border-slate-100 dark:border-slate-800 mb-4">
         <h2 className="text-xl font-bold mb-1">Hilfe & Montage</h2>
         <p className="text-slate-500 dark:text-slate-400 text-sm">
-          10-Schritte-Aufbauanleitung · Stückliste · Kostenrechner
+          10-Schritte-Aufbauanleitung · Stückliste · MQTT &amp; HA Integration
         </p>
       </div>
 
@@ -413,25 +644,36 @@ export default function Help() {
       <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl mb-4 gap-1">
         <button
           onClick={() => setTab('guide')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-medium rounded-lg transition-all ${
+          className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium rounded-lg transition-all ${
             tab === 'guide'
               ? 'bg-white dark:bg-slate-700 text-slate-800 dark:text-white shadow-sm'
               : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
           }`}
         >
-          <BookOpen size={15} />
-          Aufbauanleitung
+          <BookOpen size={14} />
+          Anleitung
         </button>
         <button
           onClick={() => setTab('materials')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-medium rounded-lg transition-all ${
+          className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium rounded-lg transition-all ${
             tab === 'materials'
               ? 'bg-white dark:bg-slate-700 text-slate-800 dark:text-white shadow-sm'
               : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
           }`}
         >
-          <Package size={15} />
+          <Package size={14} />
           Stückliste
+        </button>
+        <button
+          onClick={() => setTab('integrations')}
+          className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium rounded-lg transition-all ${
+            tab === 'integrations'
+              ? 'bg-white dark:bg-slate-700 text-slate-800 dark:text-white shadow-sm'
+              : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+          }`}
+        >
+          <Share2 size={14} />
+          Integrationen
         </button>
       </div>
 
@@ -443,7 +685,9 @@ export default function Help() {
           exit={{ opacity: 0, y: -8 }}
           transition={{ duration: 0.18 }}
         >
-          {tab === 'guide'     ? <InstallGuide /> : <MaterialsList />}
+          {tab === 'guide'        ? <InstallGuide /> :
+           tab === 'materials'   ? <MaterialsList /> :
+                                   <IntegrationsGuide />}
         </motion.div>
       </AnimatePresence>
     </div>

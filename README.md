@@ -22,16 +22,18 @@ Ein vollständig offline-fähiges Progressive Web App zur Überwachung, Analyse 
 | 🟢 **Einspeisung-Banner** | „Jetzt lohnt sich Einspeisung!" / „Günstiger Strom jetzt!" situativ |
 | 🔔 **Web Push Notifications** | Lokale SW-Notifications: Peak, Autarkie, Amortisation, Preis-Spitze |
 | ⚙️ **Alert-Konfiguration** | Per-Alert-Toggle + Schwellwert-Slider in den Settings |
-| 🔋 **Batteriespeicher** | Optionales SOC-Tracking (Simulation oder ESP32/HA) |
+| 🏠 **Home Assistant WebSocket** | Direkte HA-API-Integration, auth_ok + state_changed-Subscription |
+| 📡 **MQTT-Integration** | MQTT.js WebSocket-Client im Browser, verbindet direkt zum Broker |
+| 🔌 **ESP32 HTTP-Modus (v2)** | HTTP-Polling alle 5 s, QR-Setup, Arduino-Sketch inklusive |
+| 📤 **ESP32 MQTT-Modus (v3)** | ESP32 publiziert retained auf `bkw/energy/#`, PubSubClient |
+| 🔋 **Batteriespeicher** | Optionales SOC-Tracking (Simulation oder ESP32/HA/MQTT) |
 | 🤖 **Gemini KI-Analyse** | BYOK — dein Key, direkt zur Google API, verlässt nie den Browser |
 | 🌤 **7-Tage-Prognose** | Open-Meteo Wetter → KI-Energieprognose mit Chart-Overlay |
-| 🏠 **Home Assistant** | WebSocket-Integration (Auth + state_changed-Subscription) |
-| 🔌 **ESP32 Live Mode** | HTTP-Polling alle 5 s, QR-Setup, Arduino-Sketch inklusive |
 | 🌍 **i18n (de / en)** | Vollständige deutsche & englische Übersetzungen, RTL-vorbereitet |
 | 🌙 **Dark Mode** | System-aware + manuelle Umschaltung |
 | 📲 **PWA** | Installierbar, offline-first, Service Worker mit Push-Handler |
 | 💶 **Rendite-Tab** | 20-Jahres-ROI-Rechner mit Amortisationstabelle |
-| 🛠 **Hilfe-Tab** | 10-Schritte-Montagehandbuch + interaktive Stückliste (vormals 2 Tabs) |
+| 🛠 **Hilfe-Tab** | Montagehandbuch · Stückliste · Integrationsguide (MQTT, HA, ESP32) |
 
 ---
 
@@ -64,19 +66,141 @@ Konfiguration: **Settings → Push-Benachrichtigungen** — Pro Alert ein Toggle
 
 ---
 
+## 📡 MQTT-Integration
+
+Die App verbindet sich per **MQTT.js WebSocket** direkt zum MQTT-Broker — kein Proxy, kein Backend.
+
+### Broker einrichten
+
+**Option A – Mosquitto (Linux / Raspberry Pi)**
+```bash
+sudo apt install mosquitto mosquitto-clients
+# /etc/mosquitto/conf.d/websockets.conf:
+# listener 1883        # TCP – für ESP32
+# listener 9001        # WebSocket – für Browser
+# protocol websockets
+# allow_anonymous false
+# password_file /etc/mosquitto/passwd
+sudo systemctl restart mosquitto
+```
+
+**Option B – Home Assistant Mosquitto Add-on**
+1. HA → Einstellungen → Add-ons → **Mosquitto Broker** installieren & starten
+2. Port 9001 (WebSocket) ist automatisch aktiv
+3. Broker-URL in der App: `ws://<HA-IP>:9001`
+
+### Topic-Struktur (ESP32 v3 MQTT-Firmware)
+
+| Topic | Typ | Beschreibung |
+|---|---|---|
+| `bkw/energy/solar_w` | Float | Aktuelle Solarleistung (W) |
+| `bkw/energy/consumption_w` | Float | Haushaltsverbrauch (W) |
+| `bkw/energy/grid_w` | Float | Netzbezug (pos.) / Einspeisung (neg.) (W) |
+| `bkw/energy/battery_pct` | Float | Batterieladung (%) |
+| `bkw/energy/uptime_s` | Int | Betriebszeit (s) |
+| `bkw/energy/ip` | String | IP-Adresse des ESP32 |
+| `bkw/status` | String | `"online"` / `"offline"` (LWT) |
+
+Alle Werte werden mit **retained flag** publiziert → App erhält sofort aktuellste Werte beim Connect.
+
+### App konfigurieren
+
+1. **Setup → MQTT-Broker** öffnen
+2. Broker-URL eintragen: `ws://homeassistant.local:9001`
+3. Optional: Benutzername / Passwort
+4. Topics anpassen (Standard passt zu ESP32 v3 Firmware)
+5. **Verbinden** → Daten erscheinen sofort im Dashboard
+
+---
+
+## 🏠 Home Assistant Integration
+
+### WebSocket-API (direkt)
+
+1. **Long-Lived Access Token** in HA anlegen (*Profil → Sicherheit*)
+2. **Setup → Home Assistant** öffnen
+3. WebSocket-URL: `ws://homeassistant.local:8123/api/websocket`
+4. Token + Entity-IDs für Solar, Verbrauch, Batterie eintragen
+5. **Verbinden** — Dashboard wechselt auf HA-Livedaten
+
+### MQTT-Sensoren in HA anlegen
+
+```yaml
+# configuration.yaml
+mqtt:
+  sensor:
+    - name: "BKW Solar"
+      state_topic: "bkw/energy/solar_w"
+      unit_of_measurement: "W"
+      device_class: power
+      state_class: measurement
+
+    - name: "BKW Verbrauch"
+      state_topic: "bkw/energy/consumption_w"
+      unit_of_measurement: "W"
+      device_class: power
+
+    - name: "BKW Netz"
+      state_topic: "bkw/energy/grid_w"
+      unit_of_measurement: "W"
+      device_class: power
+```
+
+Danach stehen `sensor.bkw_solar`, `sensor.bkw_verbrauch` etc. als HA-Entitäten zur Verfügung und können über die WebSocket-Integration abonniert werden.
+
+---
+
+## 🔌 ESP32 Hardware-Setup
+
+### v2 · HTTP-Polling (einfach)
+
+Bibliotheken: `ESPAsyncWebServer`, `ArduinoJson ≥ 7`
+
+- ESP32 startet einen minimalen HTTP-Server auf Port 80
+- Endpoint: `GET http://<ESP32-IP>/energy` → JSON
+- Die App pollt alle 5 Sekunden
+- CORS-Header sind gesetzt → direktes Abrufen aus dem Browser
+
+```json
+{ "solar_w": 423.5, "consumption_w": 310.0, "grid_w": -113.5, "uptime_s": 3600 }
+```
+
+### v3 · MQTT-Push (empfohlen für Smart Home)
+
+Zusätzliche Bibliothek: `PubSubClient ≥ 2.8`
+
+- ESP32 verbindet sich sowohl mit WLAN als auch MQTT-Broker (TCP Port 1883)
+- Publiziert alle 5 Sekunden auf `bkw/energy/#` (retained)
+- Last-Will-Testament: `bkw/status` = `"offline"` bei Verbindungsabbruch
+- HTTP-Fallback bleibt erhalten → Backward-Kompatibilität zu v2
+
+### Flashen (Arduino IDE)
+
+1. **Arduino IDE 2** installieren: [arduino.cc/en/software](https://arduino.cc/en/software)
+2. Boardverwalter-URL hinzufügen:
+   ```
+   https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+   ```
+3. Board wählen: **ESP32 Dev Module**
+4. Sketch aus dem **Hardware-Tab** der App kopieren (v2 HTTP oder v3 MQTT)
+5. SSID / Passwort / Broker-Adresse im Sketch eintragen
+6. Upload → Serieller Monitor (115200 Baud) zeigt IP-Adresse
+
+---
+
 ## 🏗 Architektur
 
 ```
 src/
-├── App.tsx               # Root — Routing, HA, Theme, i18n, Strompreis-Fetch
+├── App.tsx               # Root — HA + MQTT Client, Routing, Strompreis-Fetch
 ├── main.tsx              # React 19 Entry, i18n init
 ├── sw.ts                 # Service Worker (injectManifest + Push-Handler)
 ├── components/
-│   ├── Dashboard.tsx     # Live-Daten, Strompreis, Banner, Chart, KI, Forecast
-│   ├── Settings.tsx      # Sprache, Dark Mode, BYOK, Push-Alerts, Batterie, HA
-│   ├── Hardware.tsx      # ESP32 Live Mode, QR, Arduino-Sketch
+│   ├── Dashboard.tsx     # Live-Daten, Strompreis, Banner, Chart, KI
+│   ├── Settings.tsx      # Sprache, Dark Mode, BYOK, Push, Batterie, HA, MQTT
+│   ├── Hardware.tsx      # ESP32 Live Mode, v2 HTTP / v3 MQTT Firmware
 │   ├── Economics.tsx     # Amortisation + 20-Jahres-Projektion
-│   ├── Help.tsx          # Hilfe-Tab: Montagehandbuch + Stückliste (kombiniert)
+│   ├── Help.tsx          # Anleitung · Stückliste · Integrationen
 │   ├── DeviceManager.tsx # Multi-Anlagen-Verwaltung
 │   └── ui/
 │       ├── ErrorBoundary.tsx
@@ -85,12 +209,13 @@ src/
 └── lib/
     ├── i18n.ts           # i18next, de + en Inline-Resources
     ├── ha.ts             # HAClient — HA WebSocket Protokoll
+    ├── mqtt.ts           # MQTTClient — MQTT.js WebSocket (NEU)
     ├── gemini.ts         # Gemini 2.0 Flash — Analyse + Prognose
     ├── weather.ts        # Open-Meteo — 7-Tage-Prognose
     ├── simulation.ts     # Datensimulation + Batteriemodell
     ├── esp32.ts          # ESP32 HTTP-Polling
-    ├── electricity.ts    # aWATTar EPEX Spot Preise (NEU)
-    ├── push.ts           # Web Push Alerts + Cooldown-Management (NEU)
+    ├── electricity.ts    # aWATTar EPEX Spot Preise
+    ├── push.ts           # Web Push Alerts + Cooldown-Management
     ├── deviceStore.ts    # Multi-Anlagen localStorage
     └── theme.ts          # Dark/Light Theme
 ```
@@ -126,32 +251,6 @@ GitHub Actions deployt automatisch bei jedem Push auf `main` → GitHub Pages.
 
 ---
 
-## 🏠 Home Assistant Integration
-
-1. **Long-Lived Access Token** in HA anlegen (*Profil → Sicherheit*)
-2. **Settings → Home Assistant** öffnen
-3. WebSocket-URL eingeben: `ws://homeassistant.local:8123/api/websocket`
-4. Token + Entity-IDs für Solar, Verbrauch, Batterie eintragen
-5. **Verbinden** klicken — Dashboard wechselt automatisch auf HA-Livedaten
-
-Kompatibel mit HA 2021.1+ (Standard WebSocket API).
-
----
-
-## 🔌 ESP32 Hardware-Setup
-
-1. ESP32 mit dem Arduino-Sketch aus dem **Hardware-Tab** flashen
-2. WLAN-QR-Code scannen zum Verbinden mit dem Heimnetz
-3. ESP32-IP im Hardware-Tab eingeben → **Verbindung testen**
-4. **Live (ESP32)** Modus aktivieren — Polling alle 5 Sekunden
-
-Erwartetes JSON vom ESP32:
-```json
-{ "solar_w": 420, "consumption_w": 310, "grid_w": 110, "battery_pct": 72 }
-```
-
----
-
 ## 🧪 Tests
 
 ```bash
@@ -167,7 +266,10 @@ npx playwright test   # E2E Smoke-Tests (Chromium)
 - [x] Offline-first Precaching (30+ Einträge)
 - [x] i18n — Deutsch & Englisch, LanguageDetector
 - [x] Dark Mode (system-aware + localStorage)
-- [x] Home Assistant WebSocket Client
+- [x] **Home Assistant WebSocket** Client (auth + state_changed)
+- [x] **MQTT.js Browser-Client** (WebSocket, reconnect, retained topics)
+- [x] **ESP32 v2 Firmware** (HTTP-Polling, SML-Parser, CORS)
+- [x] **ESP32 v3 Firmware** (MQTT-Push, PubSubClient, HTTP-Fallback)
 - [x] Batteriespeicher Simulation & SOC Anzeige
 - [x] Web Push Notifications via Service Worker (lokal, kein Backend)
 - [x] Alert-Konfiguration pro Typ mit Cooldown-Management
@@ -178,7 +280,7 @@ npx playwright test   # E2E Smoke-Tests (Chromium)
 - [x] Gemini KI Analyse & 7-Tage-Prognose (BYOK, 30 min Cache)
 - [x] ESP32 Live-Modus mit Fallback auf Simulation
 - [x] Code-Splitting — 10+ lazy-geladene Chunks
-- [x] **Help-Tab** — Montagehandbuch + Stückliste kombiniert (crash-sicher)
+- [x] **Help-Tab** — Anleitung · Stückliste · Integrationsguide
 - [x] Vitest Unit-Tests
 - [x] Playwright E2E Smoke-Tests
 - [x] Lighthouse CI Workflow
@@ -197,6 +299,7 @@ npx playwright test   # E2E Smoke-Tests (Chromium)
 | Charts | Recharts 3.8 |
 | Animation | Framer Motion (motion/react) |
 | i18n | react-i18next + i18next-browser-languagedetector |
+| MQTT | mqtt 5.15 (MQTT.js, WebSocket-Transport) |
 | KI | @google/generative-ai (Gemini 2.0 Flash) |
 | Wetter | Open-Meteo (kostenlos, kein API-Key) |
 | Strompreise | aWATTar Germany EPEX Spot API (kostenlos, kein Key) |
@@ -211,20 +314,6 @@ npx playwright test   # E2E Smoke-Tests (Chromium)
 
 MIT © 2025–2026 qnbs
 
-
----
-
-## ✨ Features
-
-| Feature | Details |
-|---|---|
-| 📊 **Live Dashboard** | Real-time solar generation & consumption with animated gauges |
-| 🔋 **Battery Storage** | Optional battery SOC tracking (simulated or via ESP32/HA) |
-| 🤖 **Gemini AI Analysis** | BYOK — your key, direct to Google API, never leaves browser |
-| 🌤 **7-Day Forecast** | Open-Meteo weather → AI energy prediction with chart overlay |
-| 🏠 **Home Assistant** | WebSocket integration (auth + state_changed subscription) |
-| 🔌 **ESP32 Live Mode** | HTTP polling every 5 s, QR setup, Arduino sketch included |
-| 🌍 **i18n (de / en)** | Full German & English translations, RTL-prepared |
 | 🌙 **Dark Mode** | System-aware + manual toggle |
 | 📲 **PWA** | Installable, offline-first, custom service worker with push support |
 | 🔔 **Web Push** | Browser push notifications with VAPID (permission flow in Settings) |

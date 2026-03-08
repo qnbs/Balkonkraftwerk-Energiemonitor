@@ -9,6 +9,7 @@ import { LanguageSwitcher } from './components/ui/LanguageSwitcher';
 import { getStoredTheme, setStoredTheme, type Theme } from './lib/theme';
 import { isLiveMode, setLiveMode } from './lib/esp32';
 import { HAClient, getStoredHAConfig, type HAStatus, type HAData } from './lib/ha';
+import { MQTTClient, getStoredMQTTConfig, type MQTTStatus } from './lib/mqtt';
 import { loadDevices, saveDevices, type BKWDevice } from './lib/deviceStore';
 import { fetchElectricityPrices, getElectricityCache, type MarketPrice } from './lib/electricity';
 
@@ -61,6 +62,9 @@ export default function App() {
   const [haStatus, setHaStatus] = useState<HAStatus>('disconnected');
   const [haData, setHaData] = useState<HAData | null>(null);
   const haClientRef = useRef<HAClient | null>(null);
+  const [mqttStatus, setMqttStatus] = useState<MQTTStatus>('disconnected');
+  const [mqttData, setMqttData] = useState<HAData | null>(null);
+  const mqttClientRef = useRef<MQTTClient | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [swipeDirection, setSwipeDirection] = useState<1 | -1>(1);
 
@@ -109,6 +113,27 @@ export default function App() {
     haClientRef.current = null;
     setHaData(null);
     setHaStatus('disconnected');
+  }, []);
+
+  const handleMqttConnect = useCallback(() => {
+    const cfg = getStoredMQTTConfig();
+    const client = new MQTTClient(cfg);
+    client.onStatusChange = (status, error) => {
+      setMqttStatus(status);
+      if (status === 'connected') toast.success('MQTT verbunden');
+      if (status === 'error') toast.error('MQTT Fehler', { description: error });
+    };
+    client.onDataUpdate = (data) => setMqttData(data);
+    mqttClientRef.current?.disconnect();
+    mqttClientRef.current = client;
+    client.connect();
+  }, []);
+
+  const handleMqttDisconnect = useCallback(() => {
+    mqttClientRef.current?.disconnect();
+    mqttClientRef.current = null;
+    setMqttData(null);
+    setMqttStatus('disconnected');
   }, []);
 
   // Persist battery settings
@@ -388,7 +413,7 @@ export default function App() {
                   )}
                 </div>
               </motion.div>
-            </>
+            </> 
           )}
         </AnimatePresence>
 
@@ -413,7 +438,7 @@ export default function App() {
               transition={{ duration: 0.2, ease: 'easeInOut' }}
             >
               <Suspense fallback={<DashboardSkeleton />}>
-                {activeTab === 'dashboard' && <Dashboard liveMode={liveMode} hasBattery={hasBattery} batteryCapacity={batteryCapacity} haData={haData} thresholds={thresholds} addNotification={addNotification} devices={devices} activeDeviceId={activeDeviceId} onActiveDeviceChange={handleActiveDeviceChange} electricityPrices={electricityPrices} />}
+                {activeTab === 'dashboard' && <Dashboard liveMode={liveMode} hasBattery={hasBattery} batteryCapacity={batteryCapacity} haData={haData ?? mqttData} thresholds={thresholds} addNotification={addNotification} devices={devices} activeDeviceId={activeDeviceId} onActiveDeviceChange={handleActiveDeviceChange} electricityPrices={electricityPrices} />}
                 {activeTab === 'help' && <Help />}
                 {activeTab === 'economics' && <Economics />}
                 {activeTab === 'hardware' && <Hardware liveMode={liveMode} onLiveModeChange={handleLiveModeChange} />}
@@ -441,6 +466,9 @@ export default function App() {
                     haStatus={haStatus}
                     onHaConnect={handleHaConnect}
                     onHaDisconnect={handleHaDisconnect}
+                    mqttStatus={mqttStatus}
+                    onMqttConnect={handleMqttConnect}
+                    onMqttDisconnect={handleMqttDisconnect}
                   />
                 )}
               </Suspense>

@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Cpu, Wifi, Copy, Check, ChevronDown, ChevronUp,
   AlertTriangle, CheckCircle2, Radio, ExternalLink, Plug,
-  ToggleLeft, ToggleRight,
+  ToggleLeft, ToggleRight, Share2,
 } from 'lucide-react';
 import {
   setLiveMode as saveLiveMode,
@@ -141,6 +141,178 @@ void loop() {
   delay(1);
 }`;
 
+/* ── MQTT Sketch – v3.0 (2026) ─────────────────────────────────────── */
+const ARDUINO_MQTT_CODE = `/*
+ * BKW-Monitor ESP32 v3.0 – MQTT Edition (2026)
+ * Smart Meter IR-Lesekopf → MQTT-Broker → App / Home Assistant
+ *
+ * Bibliotheken (Arduino Library Manager):
+ *   ESP32 Arduino Core  >= 3.0.0
+ *   PubSubClient        >= 2.8.0  (knolleary/pubsubclient)
+ *   ArduinoJson         >= 7.0.0
+ *   ESPAsyncWebServer   >= 3.0.0  (HTTP-Fallback)
+ *
+ * Verkabelung: identisch v2.0
+ *   TCRT5000 / D-Lesekopf TX  →  GPIO16  (UART2 RX)
+ *
+ * MQTT-Topics (alle retained):
+ *   bkw/energy/solar_w        Float – aktuelle Solarleistung (W)
+ *   bkw/energy/consumption_w  Float – Verbrauch (W)
+ *   bkw/energy/grid_w         Float – Netzbezug / -einspeisung (W)
+ *   bkw/energy/uptime_s       Int   – Betriebszeit (s)
+ *   bkw/energy/ip             Str   – IP-Adresse
+ *   bkw/status                Str   – "online" / "offline" (LWT)
+ *
+ * In der BKW-Monitor-App: Setup → MQTT → Broker-URL eintragen,
+ * z. B. ws://homeassistant.local:9001
+ */
+
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
+#include <ESPAsyncWebServer.h>
+
+// ── Konfiguration ─────────────────────────────────────────────────────
+const char* SSID          = "DEIN_WLAN_NAME";
+const char* PASSWORD      = "DEIN_PASSWORT";
+const char* MQTT_BROKER   = "homeassistant.local"; // Hostname oder IP
+const uint16_t MQTT_PORT  = 1883;                  // TCP-Port des Brokers
+const char* MQTT_USER     = "";   // leer = kein Auth
+const char* MQTT_PASS     = "";
+const char* CLIENT_ID     = "bkw-esp32";
+const char* TOPIC_PFX     = "bkw/energy/";
+const char* TOPIC_STATUS  = "bkw/status";
+const uint8_t IR_RX       = 16;
+// ─────────────────────────────────────────────────────────────────────
+
+WiFiClient     espWifi;
+PubSubClient   mqtt(espWifi);
+AsyncWebServer server(80);
+HardwareSerial irSerial(2);
+
+struct {
+  float    solar_w = 0, consumption_w = 0, grid_w = 0;
+  uint32_t updated_ms = 0;
+} meas;
+
+// ── SML-Parser (identisch v2.0) ───────────────────────────────────────
+static const uint8_t OBIS_POWER[] = {0x07,0x01,0x00,0x10,0x07,0x00};
+uint8_t  smlBuf[512];
+uint16_t smlLen = 0;
+
+void parseSML(const uint8_t* buf, uint16_t len) {
+  for (uint16_t i = 0; i+12 < len; i++) {
+    if (memcmp(&buf[i], OBIS_POWER, 6) != 0) continue;
+    int8_t  scaler = (int8_t)buf[i+7];
+    int32_t raw    = ((int32_t)buf[i+8]<<24)|((int32_t)buf[i+9]<<16)
+                   |((int32_t)buf[i+10]<<8)|(int32_t)buf[i+11];
+    float w = (float)raw * powf(10.0f, scaler);
+    meas.solar_w       = (w < 0) ? -w : 0.0f;
+    meas.consumption_w = (w >= 0) ?  w : 0.0f;
+    meas.grid_w        = meas.consumption_w - meas.solar_w;
+    meas.updated_ms    = millis();
+  }
+}
+
+void readIR() {
+  while (irSerial.available()) {
+    uint8_t b = irSerial.read();
+    if (smlLen < sizeof(smlBuf)) smlBuf[smlLen++] = b;
+    if (smlLen >= 7 &&
+        smlBuf[smlLen-7]==0x1B && smlBuf[smlLen-6]==0x1B &&
+        smlBuf[smlLen-5]==0x1B && smlBuf[smlLen-4]==0x1B &&
+        smlBuf[smlLen-3]==0x1A) {
+      parseSML(smlBuf, smlLen);
+      smlLen = 0;
+    }
+  }
+}
+
+// ── MQTT Verbindung & Reconnect ───────────────────────────────────────
+void mqttReconnect() {
+  for (uint8_t i = 0; !mqtt.connected() && i < 5; i++) {
+    Serial.print("MQTT verbinden...");
+    bool ok = (strlen(MQTT_USER) > 0)
+      ? mqtt.connect(CLIENT_ID, MQTT_USER, MQTT_PASS,
+                     TOPIC_STATUS, 1, true, "offline")
+      : mqtt.connect(CLIENT_ID, nullptr, nullptr,
+                     TOPIC_STATUS, 1, true, "offline");
+    if (ok) {
+      Serial.println(" OK");
+      mqtt.publish(TOPIC_STATUS, "online", true);
+    } else {
+      Serial.printf(" Fehler %d – Retry\\n", mqtt.state());
+      delay(5000);
+    }
+  }
+}
+
+void publishMQTT() {
+  char topic[64], payload[20];
+  struct { const char* sfx; float val; } fields[] = {
+    {"solar_w",       meas.solar_w},
+    {"consumption_w", meas.consumption_w},
+    {"grid_w",        meas.grid_w},
+    {"uptime_s",      (float)(millis()/1000)},
+  };
+  for (auto& f : fields) {
+    snprintf(topic,   sizeof(topic),   "%s%s", TOPIC_PFX, f.sfx);
+    snprintf(payload, sizeof(payload), "%.1f", f.val);
+    mqtt.publish(topic, payload, true);    // retained
+  }
+  snprintf(topic, sizeof(topic), "%sip", TOPIC_PFX);
+  mqtt.publish(topic, WiFi.localIP().toString().c_str(), true);
+}
+
+void setup() {
+  Serial.begin(115200);
+  irSerial.begin(9600, SERIAL_8N1, IR_RX, -1);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(SSID, PASSWORD);
+  Serial.print("WLAN");
+  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+  Serial.printf("\\nIP: %s\\n", WiFi.localIP().toString().c_str());
+
+  mqtt.setServer(MQTT_BROKER, MQTT_PORT);
+  mqtt.setBufferSize(512);
+  mqttReconnect();
+
+  // HTTP-Fallback (Backward-Kompatibilität zu v2.0)
+  server.on("/energy", HTTP_GET, [](AsyncWebServerRequest* req) {
+    JsonDocument doc;
+    doc["solar_w"]       = meas.solar_w;
+    doc["consumption_w"] = meas.consumption_w;
+    doc["grid_w"]        = meas.grid_w;
+    doc["uptime_s"]      = millis() / 1000UL;
+    doc["ip"]            = WiFi.localIP().toString();
+    doc["age_ms"]        = millis() - meas.updated_ms;
+    String json; serializeJson(doc, json);
+    auto* r = req->beginResponse(200, "application/json", json);
+    r->addHeader("Access-Control-Allow-Origin", "*");
+    req->send(r);
+  });
+  server.on("/energy", HTTP_OPTIONS, [](AsyncWebServerRequest* req) {
+    auto* r = req->beginResponse(204);
+    r->addHeader("Access-Control-Allow-Origin", "*");
+    r->addHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+    req->send(r);
+  });
+  server.begin();
+}
+
+uint32_t lastPub = 0;
+
+void loop() {
+  readIR();
+  if (!mqtt.connected()) mqttReconnect();
+  mqtt.loop();
+  if (millis() - lastPub >= 5000) {
+    lastPub = millis();
+    publishMQTT();
+  }
+}`;
+
 export default function Hardware({ liveMode, onLiveModeChange }: HardwareProps) {
   const [ssid, setSsid] = useState('');
   const [wifiPass, setWifiPass] = useState('');
@@ -150,6 +322,7 @@ export default function Hardware({ liveMode, onLiveModeChange }: HardwareProps) 
   const [testError, setTestError] = useState('');
   const [copied, setCopied] = useState(false);
   const [showCode, setShowCode] = useState(false);
+  const [firmwareTab, setFirmwareTab] = useState<'http' | 'mqtt'>('http');
   const [mockData, setMockData] = useState({ solar: 423, cons: 310 });
 
   // Mock WS ticker – only running in simulation mode
@@ -186,8 +359,9 @@ export default function Hardware({ liveMode, onLiveModeChange }: HardwareProps) 
   };
 
   const handleCopy = async () => {
+    const code = firmwareTab === 'mqtt' ? ARDUINO_MQTT_CODE : ARDUINO_CODE;
     try {
-      await navigator.clipboard.writeText(ARDUINO_CODE);
+      await navigator.clipboard.writeText(code);
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
     } catch { /* clipboard blocked */ }
@@ -458,10 +632,10 @@ export default function Hardware({ liveMode, onLiveModeChange }: HardwareProps) 
             </div>
             <div>
               <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-                Arduino-Sketch (ESP32, 2026)
+                ESP32-Firmware (Arduino IDE)
               </p>
               <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
-                UART2 SML-Parser · ESPAsyncWebServer · ArduinoJson 7
+                v2 HTTP-Polling · v3 MQTT-Publishing · SML-Parser inklusive
               </p>
             </div>
           </div>
@@ -477,8 +651,42 @@ export default function Hardware({ liveMode, onLiveModeChange }: HardwareProps) 
               exit={{ height: 0 }}
               className="overflow-hidden border-t border-slate-100 dark:border-slate-800"
             >
+              {/* Firmware variant tab switcher */}
+              <div className="flex gap-1 m-4 mb-0 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
+                <button
+                  onClick={() => setFirmwareTab('http')}
+                  className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold rounded-lg transition-all ${
+                    firmwareTab === 'http'
+                      ? 'bg-white dark:bg-slate-700 text-amber-700 dark:text-amber-300 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                  }`}
+                >
+                  <Plug size={13} />
+                  v2 · HTTP-Poll
+                </button>
+                <button
+                  onClick={() => setFirmwareTab('mqtt')}
+                  className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold rounded-lg transition-all ${
+                    firmwareTab === 'mqtt'
+                      ? 'bg-white dark:bg-slate-700 text-emerald-700 dark:text-emerald-300 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                  }`}
+                >
+                  <Share2 size={13} />
+                  v3 · MQTT-Push
+                </button>
+              </div>
+              {firmwareTab === 'mqtt' && (
+                <div className="mx-4 mt-3 p-3 bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800 rounded-xl text-xs text-emerald-700 dark:text-emerald-300 leading-relaxed">
+                  <strong>MQTT-Modus:</strong> ESP32 publiziert alle 5 s auf <code className="font-mono bg-emerald-100 dark:bg-emerald-900 px-1 rounded">bkw/energy/#</code>.
+                  Zusätzlich bleibt der HTTP-Endpunkt <code className="font-mono bg-emerald-100 dark:bg-emerald-900 px-1 rounded">/energy</code> aktiv (Backward-Kompatibilität).
+                  Broker-Adresse unter <strong>Setup → MQTT</strong> eintragen.
+                </div>
+              )}
               <div className="flex items-center justify-between px-4 pt-3 pb-2">
-                <span className="text-[10px] font-mono text-slate-400">esp32_bkw_monitor.ino</span>
+                <span className="text-[10px] font-mono text-slate-400">
+                  {firmwareTab === 'mqtt' ? 'esp32_bkw_mqtt.ino' : 'esp32_bkw_monitor.ino'}
+                </span>
                 <button
                   onClick={handleCopy}
                   className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium transition-all ${
@@ -493,7 +701,7 @@ export default function Hardware({ liveMode, onLiveModeChange }: HardwareProps) 
               </div>
               <div className="px-4 pb-5 overflow-x-auto">
                 <pre className="text-[11px] font-mono text-slate-700 dark:text-slate-300 leading-relaxed whitespace-pre">
-                  {ARDUINO_CODE}
+                  {firmwareTab === 'mqtt' ? ARDUINO_MQTT_CODE : ARDUINO_CODE}
                 </pre>
               </div>
             </motion.div>
