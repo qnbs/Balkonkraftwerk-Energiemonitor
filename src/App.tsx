@@ -365,7 +365,7 @@ export default function App() {
   }, [thresholds, addNotification]);
 
   // Swipe navigation handler
-  const handleDragEnd = (_: unknown, info: PanInfo) => {
+  const handleDragEnd = (_e: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => {
     const currentIndex = TAB_IDS.indexOf(activeTab);
     if (info.offset.x < -SWIPE_THRESHOLD && info.velocity.x < -100 && currentIndex < TAB_IDS.length - 1) {
       setSwipeDirection(1);
@@ -404,19 +404,23 @@ export default function App() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+              aria-hidden="true"
             >
               <motion.div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="pin-modal-title"
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
                 className="bg-white dark:bg-slate-900 rounded-2xl p-6 shadow-2xl w-full max-w-sm border border-slate-200 dark:border-slate-700"
               >
                 <div className="flex items-center gap-3 mb-4">
-                  <div className="bg-violet-100 dark:bg-violet-900 p-2.5 rounded-xl">
+                  <div className="bg-violet-100 dark:bg-violet-900 p-2.5 rounded-xl" aria-hidden="true">
                     <Lock size={20} className="text-violet-600 dark:text-violet-400" />
                   </div>
                   <div>
-                    <h3 className="font-bold text-sm">
+                    <h3 id="pin-modal-title" className="font-bold text-sm">
                       {pinModalMode === 'db' ? 'Datenbank entsperren' : pinModalMode === 'both' ? 'App entsperren' : 'API-Key entsperren'}
                     </h3>
                     <p className="text-xs text-slate-500">
@@ -429,7 +433,9 @@ export default function App() {
 
                 {!showForgotPin ? (
                   <>
+                    <label htmlFor="pin-modal-input" className="sr-only">PIN eingeben</label>
                     <input
+                      id="pin-modal-input"
                       autoFocus
                       type="password"
                       inputMode="numeric"
@@ -438,9 +444,12 @@ export default function App() {
                       onChange={(e) => { setPinInput(e.target.value); setPinError(''); }}
                       onKeyDown={(e) => e.key === 'Enter' && handlePinSubmit()}
                       placeholder="PIN eingeben"
+                      autoComplete="current-password"
                       className="w-full px-3 py-2.5 text-sm border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500 mb-3"
                     />
-                    {pinError && <p className="text-xs text-rose-500 mb-3">{pinError}</p>}
+                    {pinError && (
+                      <p role="alert" className="text-xs text-rose-500 mb-3">{pinError}</p>
+                    )}
                     <div className="flex gap-2 mb-3">
                       <button
                         onClick={handlePinSubmit}
@@ -467,7 +476,7 @@ export default function App() {
                 ) : (
                   /* Forgot PIN – reset confirmation */
                   <div className="space-y-3">
-                    <div className="bg-rose-50 dark:bg-rose-950 border border-rose-200 dark:border-rose-800 rounded-xl p-3">
+                    <div className="bg-rose-50 dark:bg-rose-950 border border-rose-200 dark:border-rose-800 rounded-xl p-3" role="alert">
                       <p className="text-xs font-bold text-rose-700 dark:text-rose-300 mb-1">⚠️ UNWIDERRUFLICH!</p>
                       <p className="text-xs text-rose-600 dark:text-rose-400 leading-relaxed">
                         Alle gespeicherten Daten (Messwerte, Einstellungen, Geräte, Berichte und API-Key) werden <strong>permanent gelöscht</strong>. Die App beginnt von vorne.
@@ -530,6 +539,7 @@ export default function App() {
             <motion.span
               animate={{ rotate: [0, -10, 10, 0] }}
               transition={{ duration: 2, repeat: Infinity, repeatDelay: 5 }}
+              aria-hidden="true"
             >
               <Zap className="text-amber-300" size={22} />
             </motion.span>
@@ -551,6 +561,7 @@ export default function App() {
                   exit={{ y: 12, opacity: 0 }}
                   transition={{ duration: 0.15 }}
                   className="block"
+                  aria-hidden="true"
                 >
                   {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
                 </motion.span>
@@ -560,13 +571,16 @@ export default function App() {
               whileTap={{ scale: 0.9 }}
               onClick={() => setShowNotifications(!showNotifications)}
               className="relative p-2 hover:bg-white/10 rounded-full transition-colors"
-              aria-label="Benachrichtigungen öffnen"
+              aria-label={unreadCount > 0 ? `${unreadCount} ungelesene Benachrichtigungen – öffnen` : 'Benachrichtigungen öffnen'}
+              aria-expanded={showNotifications}
+              aria-haspopup="dialog"
             >
-              <Bell size={20} />
+              <Bell size={20} aria-hidden="true" />
               {unreadCount > 0 && (
                 <motion.span
                   initial={{ scale: 0 }}
                   animate={{ scale: 1 }}
+                  aria-hidden="true"
                   className="absolute top-1 right-1 bg-rose-500 text-white text-[9px] font-bold w-4 h-4 flex items-center justify-center rounded-full border-2 border-emerald-600 dark:border-emerald-800"
                 >
                   {unreadCount > 9 ? '9+' : unreadCount}
@@ -584,10 +598,14 @@ export default function App() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="fixed inset-0 bg-black/20 z-35"
+                className="fixed inset-0 bg-black/20 z-[35]"
+                aria-hidden="true"
                 onClick={() => setShowNotifications(false)}
               />
               <motion.div
+                role="dialog"
+                aria-modal="true"
+                aria-label="Benachrichtigungen"
                 initial={{ opacity: 0, y: -10, scale: 0.95 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: -10, scale: 0.95 }}
@@ -597,15 +615,23 @@ export default function App() {
                 <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center">
                   <h2 className="font-semibold text-sm">Benachrichtigungen</h2>
                   <div className="flex gap-3">
-                    <button onClick={markAllRead} className="text-xs text-emerald-600 hover:text-emerald-700 font-medium">
+                    <button
+                      onClick={markAllRead}
+                      aria-label="Alle Benachrichtigungen als gelesen markieren"
+                      className="text-xs text-emerald-600 hover:text-emerald-700 font-medium"
+                    >
                       Alle gelesen
                     </button>
-                    <button onClick={() => setShowNotifications(false)} className="text-slate-400 hover:text-slate-600">
-                      <X size={18} />
+                    <button
+                      onClick={() => setShowNotifications(false)}
+                      aria-label="Benachrichtigungen schließen"
+                      className="text-slate-400 hover:text-slate-600"
+                    >
+                      <X size={18} aria-hidden="true" />
                     </button>
                   </div>
                 </div>
-                <div className="overflow-y-auto p-2 flex-1">
+                <div className="overflow-y-auto p-2 flex-1" role="list" aria-label="Benachrichtigungs-Liste">
                   {notifications.length === 0 ? (
                     <p className="text-center text-slate-500 text-sm p-4">Keine Benachrichtigungen</p>
                   ) : (
@@ -613,6 +639,7 @@ export default function App() {
                       {notifications.map((notif, i) => (
                         <motion.div
                           key={notif.id}
+                          role="listitem"
                           initial={{ opacity: 0, x: 20 }}
                           animate={{ opacity: 1, x: 0 }}
                           transition={{ delay: i * 0.03 }}
@@ -640,7 +667,7 @@ export default function App() {
                             >
                               {notif.title}
                             </h4>
-                            <span className="text-[10px] text-slate-400">
+                            <span className="text-[10px] text-slate-400" aria-label={`Uhrzeit: ${notif.timestamp.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}`}>
                               {notif.timestamp.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
                             </span>
                           </div>
@@ -657,7 +684,9 @@ export default function App() {
 
         {/* Main – swipeable */}
         <motion.main
+          id="main-content"
           ref={mainRef}
+          tabIndex={-1}
           className="flex-1 overflow-y-auto overflow-x-hidden pb-20 touch-pan-y"
           drag="x"
           dragConstraints={{ left: 0, right: 0 }}
@@ -717,7 +746,6 @@ export default function App() {
         {/* Bottom Navigation */}
         <nav
           className="fixed bottom-0 w-full bg-white/80 dark:bg-slate-900/80 backdrop-blur-lg border-t border-slate-200 dark:border-slate-800 z-20 safe-area-pb"
-          role="navigation"
           aria-label="Hauptnavigation"
         >
           <div className="flex justify-around items-center h-16 max-w-lg mx-auto relative">
@@ -732,7 +760,6 @@ export default function App() {
                   className={`relative flex flex-col items-center justify-center w-full h-full gap-0.5 transition-colors ${
                     isActive ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400 dark:text-slate-500 hover:text-slate-600'
                   }`}
-                  aria-label={tab.label}
                   aria-current={isActive ? 'page' : undefined}
                 >
                   {isActive && (
@@ -740,11 +767,13 @@ export default function App() {
                       layoutId="nav-indicator"
                       className="absolute -top-px left-1/2 -translate-x-1/2 w-8 h-0.5 bg-emerald-600 dark:bg-emerald-400 rounded-full"
                       transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                      aria-hidden="true"
                     />
                   )}
                   <motion.span
                     animate={isActive ? { y: -2 } : { y: 0 }}
                     transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+                    aria-hidden="true"
                   >
                     <Icon size={22} />
                   </motion.span>

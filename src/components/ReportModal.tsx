@@ -29,7 +29,10 @@ function downloadBlob(blob: Blob, filename: string) {
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
   a.click();
+  document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
 
@@ -337,9 +340,13 @@ export default function ReportModal({ data, deviceName, deviceId, onClose }: Rep
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-end sm:items-center justify-center p-4"
+        aria-hidden="true"
         onClick={(e) => e.target === e.currentTarget && onClose()}
       >
         <motion.div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="report-modal-title"
           initial={{ opacity: 0, y: 40, scale: 0.97 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 40, scale: 0.97 }}
@@ -349,14 +356,15 @@ export default function ReportModal({ data, deviceName, deviceId, onClose }: Rep
           {/* Header */}
           <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex justify-between items-start">
             <div>
-              <h2 className="text-base font-bold">{t('report.title')}</h2>
+              <h2 id="report-modal-title" className="text-base font-bold">{t('report.title')}</h2>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{deviceName}</p>
             </div>
             <button
               onClick={onClose}
+              aria-label="Bericht-Dialog schließen"
               className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
             >
-              <X size={18} />
+              <X size={18} aria-hidden="true" />
             </button>
           </div>
 

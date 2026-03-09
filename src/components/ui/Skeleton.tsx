@@ -9,7 +9,12 @@ export function Skeleton({ className = '' }: { className?: string }) {
 
 export function DashboardSkeleton() {
   return (
-    <div className="p-4 space-y-4 max-w-4xl mx-auto pb-24 animate-in">
+    <div
+      role="status"
+      aria-label="Dashboard wird geladen"
+      className="p-4 space-y-4 max-w-4xl mx-auto pb-24 animate-in"
+    >
+      <span className="sr-only">Daten werden geladen…</span>
       {/* Live cards */}
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-100 dark:border-slate-800 flex flex-col items-center gap-2">

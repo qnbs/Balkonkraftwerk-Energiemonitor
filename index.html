@@ -6,18 +6,25 @@
     <meta name="theme-color" content="#059669" />
     <meta name="color-scheme" content="light dark" />
     <meta name="description" content="Energiemonitor & Bauanleitung für dein Balkonkraftwerk – Open Source PWA" />
+    <meta name="application-name" content="BKW Monitor" />
     <meta name="robots" content="index, follow" />
     <link rel="canonical" href="https://qnbs.github.io/Balkonkraftwerk-Energiemonitor/" />
     <link rel="icon" href="/Balkonkraftwerk-Energiemonitor/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/Balkonkraftwerk-Energiemonitor/pwa-192.png" />
-    <!-- Preconnect for Open-Meteo weather API -->
+    <!-- Preconnect for external APIs -->
     <link rel="preconnect" href="https://api.open-meteo.com" crossorigin />
-    <!-- Preload app entry point -->
-    <link rel="modulepreload" href="/Balkonkraftwerk-Energiemonitor/src/main.tsx" />
+    <link rel="preconnect" href="https://api.awattar.de" crossorigin />
     <title>Balkonkraftwerk Energiemonitor</title>
   </head>
   <body class="bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 antialiased">
+    <!-- Skip-to-content link for keyboard and screen-reader users -->
+    <a href="#main-content" class="skip-link">Zum Hauptinhalt springen</a>
     <div id="root"></div>
+    <noscript>
+      <p style="padding:2rem;text-align:center;font-family:sans-serif">
+        Diese App benötigt JavaScript. Bitte aktiviere JavaScript in deinem Browser.
+      </p>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

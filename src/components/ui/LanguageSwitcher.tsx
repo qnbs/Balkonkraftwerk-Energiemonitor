@@ -22,26 +22,31 @@ export function LanguageSwitcher() {
     setOpen(false);
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') setOpen(false);
+  };
+
   return (
-    <div className="relative">
+    <div className="relative" onKeyDown={handleKeyDown}>
       <motion.button
         whileTap={{ scale: 0.9 }}
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-1 p-2 hover:bg-white/10 rounded-full transition-colors text-xs font-bold tracking-wider"
-        aria-label="Sprache wechseln"
+        aria-label={`Sprache: ${current.name}. Sprache ändern`}
         aria-haspopup="listbox"
         aria-expanded={open}
       >
-        <Globe size={15} />
+        <Globe size={15} aria-hidden="true" />
         {current.label}
       </motion.button>
 
       <AnimatePresence>
         {open && (
           <>
-            <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+            <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden="true" />
             <motion.ul
               role="listbox"
+              aria-label="Sprache auswählen"
               initial={{ opacity: 0, y: -6, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -6, scale: 0.95 }}
@@ -49,7 +54,7 @@ export function LanguageSwitcher() {
               className="absolute right-0 mt-1 w-32 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-50 overflow-hidden"
             >
               {LANGS.map((lang) => (
-                <li key={lang.code}>
+                <li key={lang.code} role="presentation">
                   <button
                     role="option"
                     aria-selected={lang.code === i18n.language}
@@ -60,7 +65,7 @@ export function LanguageSwitcher() {
                         : 'hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300'
                     }`}
                   >
-                    <span className="w-5 text-xs font-bold opacity-60">{lang.label}</span>
+                    <span className="w-5 text-xs font-bold opacity-60" aria-hidden="true">{lang.label}</span>
                     {lang.name}
                   </button>
                 </li>

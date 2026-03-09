@@ -329,6 +329,7 @@ export default function Settings({
                 document.documentElement.lang = code;
                 document.documentElement.dir = 'ltr';
               }}
+              aria-pressed={i18n.language === code}
               className={`flex-1 py-2.5 rounded-xl text-sm font-medium border transition-all ${
                 i18n.language === code
                   ? 'bg-sky-600 border-sky-600 text-white shadow-sm'
@@ -357,6 +358,7 @@ export default function Settings({
             role="switch"
             aria-checked={theme === 'dark'}
             aria-label={t('settings.darkMode')}
+            id="dark-mode-switch"
           >
             <motion.span
               className="absolute top-0.5 left-0.5 w-6 h-6 bg-white rounded-full shadow-sm flex items-center justify-center"
@@ -418,7 +420,9 @@ export default function Settings({
             {/* PIN unlock for encrypted key (if not yet in cache) */}
             {keyEncrypted && !cachedKey && (
               <div className="flex gap-2">
+                <label htmlFor="settings-pin-unlock" className="sr-only">PIN eingeben zum Entsperren</label>
                 <input
+                  id="settings-pin-unlock"
                   type="password"
                   inputMode="numeric"
                   maxLength={8}
@@ -426,6 +430,7 @@ export default function Settings({
                   onChange={(e) => setPinInput(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleUnlockKey()}
                   placeholder="PIN eingeben"
+                  autoComplete="current-password"
                   className="flex-1 px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500"
                 />
                 <button
@@ -462,22 +467,26 @@ export default function Settings({
                   className="overflow-hidden space-y-2"
                 >
                   <div className="relative">
+                    <label htmlFor="settings-api-key-change" className="sr-only">Neuer Gemini API-Key</label>
                     <input
+                      id="settings-api-key-change"
                       type={showKeyInput ? 'password' : 'text'}
                       value={apiKeyInput}
                       onChange={(e) => setApiKeyInput(e.target.value)}
                       placeholder="Neuer Gemini API-Key (AIza...)"
+                      autoComplete="off"
                       className="w-full px-3 py-2 pr-9 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500"
                     />
                   </div>
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => setUsePinProtection(!usePinProtection)}
+                      aria-pressed={usePinProtection}
                       className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
                         usePinProtection ? 'bg-violet-100 dark:bg-violet-900 border-violet-300 dark:border-violet-700 text-violet-700 dark:text-violet-300' : 'border-slate-200 dark:border-slate-700 text-slate-500'
                       }`}
                     >
-                      <Lock size={12} /> PIN-Schutz
+                      <Lock size={12} aria-hidden="true" /> PIN-Schutz
                     </button>
                     {usePinProtection && (
                       <input
@@ -487,6 +496,8 @@ export default function Settings({
                         value={pinInput}
                         onChange={(e) => setPinInput(e.target.value)}
                         placeholder="Neuer PIN (mind. 4 Stellen)"
+                        aria-label="PIN für API-Key-Schutz"
+                        autoComplete="new-password"
                         className="flex-1 px-2.5 py-1.5 text-xs border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500"
                       />
                     )}
@@ -506,14 +517,16 @@ export default function Settings({
           /* No key yet */
           <div className="space-y-3">
             <div>
-              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+              <label htmlFor="settings-api-key-new" className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
                 {t('settings.apiKeyLabel')}
               </label>
               <input
+                id="settings-api-key-new"
                 type="password"
                 value={apiKeyInput}
                 onChange={(e) => setApiKeyInput(e.target.value)}
                 placeholder="AIza..."
+                autoComplete="off"
                 className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent"
               />
             </div>
@@ -524,6 +537,7 @@ export default function Settings({
                 className={`relative w-10 h-6 rounded-full transition-colors flex-shrink-0 ${usePinProtection ? 'bg-violet-500' : 'bg-slate-300'}`}
                 role="switch"
                 aria-checked={usePinProtection}
+                aria-label="PIN-Schutz für API-Key aktivieren"
               >
                 <motion.span
                   className="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow-sm"
@@ -544,6 +558,8 @@ export default function Settings({
                 value={pinInput}
                 onChange={(e) => setPinInput(e.target.value)}
                 placeholder="PIN (mind. 4 Stellen)"
+                aria-label="PIN für API-Key-Schutz"
+                autoComplete="new-password"
                 className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500"
               />
             )}
@@ -567,18 +583,22 @@ export default function Settings({
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+              aria-hidden="true"
             >
               <motion.div
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
                 className="bg-white dark:bg-slate-900 rounded-2xl p-6 shadow-2xl w-full max-w-sm border border-amber-200 dark:border-amber-800"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="security-modal-title"
               >
                 <div className="flex items-center gap-3 mb-4">
                   <div className="bg-amber-100 dark:bg-amber-900 p-2.5 rounded-xl">
-                    <Shield size={20} className="text-amber-600 dark:text-amber-400" />
+                    <Shield size={20} className="text-amber-600 dark:text-amber-400" aria-hidden="true" />
                   </div>
-                  <h3 className="font-bold text-sm">Sicherheitshinweis</h3>
+                  <h3 id="security-modal-title" className="font-bold text-sm">Sicherheitshinweis</h3>
                 </div>
                 <div className="space-y-2.5 mb-5 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
                   <p>✅ <strong>Lokal & privat:</strong> Dein API-Key wird ausschließlich in deinem Browser (IndexedDB) gespeichert – kein Server, keine Cloud.</p>
@@ -590,7 +610,7 @@ export default function Settings({
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300 font-medium hover:underline"
                   >
-                    Google AI Studio öffnen <ExternalLink size={11} />
+                    Google AI Studio öffnen <ExternalLink size={11} aria-hidden="true" />
                   </a>
                 </div>
                 <div className="flex gap-2">
@@ -598,12 +618,14 @@ export default function Settings({
                     onClick={doSaveKey}
                     disabled={keySaving}
                     className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-all"
+                    aria-label="Sicherheitshinweis verstanden und Key speichern"
                   >
                     {keySaving ? 'Speichere...' : 'Verstanden – Speichern'}
                   </button>
                   <button
                     onClick={() => setShowSecurityModal(false)}
                     className="px-4 py-2.5 rounded-xl text-sm text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+                    aria-label="Sicherheits-Dialog abbrechen"
                   >
                     Abbrechen
                   </button>
@@ -675,6 +697,7 @@ export default function Settings({
                   className={`relative w-10 h-6 rounded-full transition-colors ${alertPrefs[key] ? 'bg-emerald-500' : 'bg-slate-300'}`}
                   role="switch"
                   aria-checked={alertPrefs[key]}
+                  aria-label={label}
                 >
                   <motion.span
                     className="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow-sm"
@@ -748,6 +771,7 @@ export default function Settings({
               className={`relative w-12 h-7 rounded-full transition-colors ${hasBattery ? 'bg-emerald-500' : 'bg-slate-300'}`}
               role="switch"
               aria-checked={hasBattery}
+              aria-label={t('settings.hasBattery')}
             >
               <motion.span
                 className="absolute top-0.5 left-0.5 w-6 h-6 bg-white rounded-full shadow-sm"
@@ -811,20 +835,23 @@ export default function Settings({
           /* ── Enable encryption ── */
           <div className="space-y-3">
             <div>
-              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">PIN (mind. 4 Stellen)</label>
+              <label htmlFor="db-enc-pin-new" className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">PIN (mind. 4 Stellen)</label>
               <input
+                id="db-enc-pin-new"
                 type="password"
                 inputMode="numeric"
                 maxLength={8}
                 value={dbEncPin}
                 onChange={(e) => setDbEncPin(e.target.value)}
                 placeholder="PIN festlegen"
+                autoComplete="new-password"
                 className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">PIN bestätigen</label>
+              <label htmlFor="db-enc-pin-confirm" className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">PIN bestätigen</label>
               <input
+                id="db-enc-pin-confirm"
                 type="password"
                 inputMode="numeric"
                 maxLength={8}
@@ -832,6 +859,7 @@ export default function Settings({
                 onChange={(e) => setDbEncPinConfirm(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleEnableDbEncryption()}
                 placeholder="PIN wiederholen"
+                autoComplete="new-password"
                 className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500"
               />
             </div>
@@ -877,9 +905,9 @@ export default function Settings({
                   exit={{ opacity: 0, height: 0 }}
                   className="overflow-hidden space-y-2 pt-1"
                 >
-                  <input type="password" inputMode="numeric" maxLength={8} value={dbEncOldPin} onChange={(e) => setDbEncOldPin(e.target.value)} placeholder="Aktueller PIN" className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500" />
-                  <input type="password" inputMode="numeric" maxLength={8} value={dbEncNewPin} onChange={(e) => setDbEncNewPin(e.target.value)} placeholder="Neuer PIN (mind. 4 Stellen)" className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500" />
-                  <input type="password" inputMode="numeric" maxLength={8} value={dbEncNewPinConfirm} onChange={(e) => setDbEncNewPinConfirm(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleChangeDbPin()} placeholder="Neuen PIN bestätigen" className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                  <input type="password" inputMode="numeric" maxLength={8} value={dbEncOldPin} onChange={(e) => setDbEncOldPin(e.target.value)} placeholder="Aktueller PIN" aria-label="Aktueller PIN" autoComplete="current-password" className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                  <input type="password" inputMode="numeric" maxLength={8} value={dbEncNewPin} onChange={(e) => setDbEncNewPin(e.target.value)} placeholder="Neuer PIN (mind. 4 Stellen)" aria-label="Neuer PIN" autoComplete="new-password" className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                  <input type="password" inputMode="numeric" maxLength={8} value={dbEncNewPinConfirm} onChange={(e) => setDbEncNewPinConfirm(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleChangeDbPin()} placeholder="Neuen PIN bestätigen" aria-label="Neuen PIN bestätigen" autoComplete="new-password" className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500" />
                   {dbEncNewPin && dbEncNewPinConfirm && dbEncNewPin !== dbEncNewPinConfirm && (
                     <p className="text-xs text-rose-500">Neue PINs stimmen nicht überein</p>
                   )}
@@ -911,7 +939,7 @@ export default function Settings({
                   className="overflow-hidden space-y-2 pt-1"
                 >
                   <p className="text-xs text-amber-700 dark:text-amber-400">Alle Daten werden entschlüsselt und liegen wieder im Klartext vor.</p>
-                  <input type="password" inputMode="numeric" maxLength={8} value={dbEncOldPin} onChange={(e) => setDbEncOldPin(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleDisableDbEncryption()} placeholder="Aktuellen PIN eingeben" className="w-full px-3 py-2 text-sm border border-amber-200 dark:border-amber-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                  <input type="password" inputMode="numeric" maxLength={8} value={dbEncOldPin} onChange={(e) => setDbEncOldPin(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleDisableDbEncryption()} placeholder="Aktuellen PIN eingeben" aria-label="Aktuellen PIN eingeben" autoComplete="current-password" className="w-full px-3 py-2 text-sm border border-amber-200 dark:border-amber-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500" />
                   <button
                     onClick={handleDisableDbEncryption}
                     disabled={!dbEncOldPin || dbEncBusy}
@@ -1063,10 +1091,11 @@ export default function Settings({
                   className="overflow-hidden space-y-2"
                 >
                   <div>
-                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                    <label htmlFor="magic-link-email" className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
                       E-Mail-Adresse
                     </label>
                     <input
+                      id="magic-link-email"
                       type="email"
                       value={magicLinkEmail}
                       onChange={(e) => setMagicLinkEmail(e.target.value)}
@@ -1116,8 +1145,9 @@ export default function Settings({
         </h2>
         <div className="space-y-3">
           <div>
-            <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('settings.haUrl')}</label>
+            <label htmlFor="ha-url" className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('settings.haUrl')}</label>
             <input
+              id="ha-url"
               type="url"
               value={haConfig.url}
               onChange={(e) => setHaConfig({ ...haConfig, url: e.target.value })}
@@ -1126,22 +1156,25 @@ export default function Settings({
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('settings.haToken')}</label>
+            <label htmlFor="ha-token" className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('settings.haToken')}</label>
             <input
+              id="ha-token"
               type="password"
               value={haConfig.token}
               onChange={(e) => setHaConfig({ ...haConfig, token: e.target.value })}
               placeholder="eyJ..."
+              autoComplete="off"
               className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
             />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {(['entitySolar', 'entityLoad', 'entityBattery'] as const).map((key) => (
               <div key={key}>
-                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                <label htmlFor={`ha-entity-${key}`} className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
                   {t(`settings.${key === 'entitySolar' ? 'haSolar' : key === 'entityLoad' ? 'haLoad' : 'haBattery'}`)}
                 </label>
                 <input
+                  id={`ha-entity-${key}`}
                   type="text"
                   value={haConfig[key]}
                   onChange={(e) => setHaConfig({ ...haConfig, [key]: e.target.value })}
@@ -1199,10 +1232,11 @@ export default function Settings({
         </div>
         <div className="space-y-3">
           <div>
-            <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+            <label htmlFor="mqtt-broker-url" className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
               Broker-URL (WebSocket)
             </label>
             <input
+              id="mqtt-broker-url"
               type="url"
               value={mqttConfig.brokerUrl}
               onChange={(e) => setMqttConfig({ ...mqttConfig, brokerUrl: e.target.value })}
@@ -1212,10 +1246,11 @@ export default function Settings({
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+              <label htmlFor="mqtt-username" className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
                 Benutzername
               </label>
               <input
+                id="mqtt-username"
                 type="text"
                 value={mqttConfig.username}
                 onChange={(e) => setMqttConfig({ ...mqttConfig, username: e.target.value })}
@@ -1225,10 +1260,11 @@ export default function Settings({
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+              <label htmlFor="mqtt-password" className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
                 Passwort
               </label>
               <input
+                id="mqtt-password"
                 type="password"
                 value={mqttConfig.password}
                 onChange={(e) => setMqttConfig({ ...mqttConfig, password: e.target.value })}
@@ -1248,10 +1284,11 @@ export default function Settings({
             { key: 'topicGrid',    label: 'Netz (W)',     ph: 'bkw/energy/grid_w' },
           ] as const).map(({ key, label, ph }) => (
             <div key={key}>
-              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+              <label htmlFor={`mqtt-topic-${key}`} className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
                 {label}
               </label>
               <input
+                id={`mqtt-topic-${key}`}
                 type="text"
                 value={mqttConfig[key]}
                 onChange={(e) => setMqttConfig({ ...mqttConfig, [key]: e.target.value })}

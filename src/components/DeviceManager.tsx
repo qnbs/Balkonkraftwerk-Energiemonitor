@@ -50,13 +50,14 @@ function AddDeviceForm({
       className="bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800 rounded-2xl p-4 space-y-3 overflow-hidden"
     >
       <h3 className="text-sm font-bold text-emerald-800 dark:text-emerald-200 flex items-center gap-2">
-        <Plus size={16} /> {t('devices.addTitle')}
+        <Plus size={16} aria-hidden="true" /> {t('devices.addTitle')}
       </h3>
       <div>
-        <label className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">
+        <label htmlFor="add-device-name" className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">
           {t('devices.deviceName')}
         </label>
         <input
+          id="add-device-name"
           autoFocus
           type="text"
           value={name}
@@ -67,19 +68,21 @@ function AddDeviceForm({
         />
       </div>
       <div>
-        <label className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">
+        <label htmlFor="add-device-peak" className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">
           {t('devices.peakPower')}: <span className="font-bold text-emerald-600">{peak} W</span>
         </label>
         <input
+          id="add-device-peak"
           type="range"
           min="400"
           max="2000"
           step="100"
           value={peak}
           onChange={(e) => setPeak(parseInt(e.target.value))}
+          aria-label={`${t('devices.peakPower')}: ${peak} W`}
           className="w-full h-1.5 rounded-lg appearance-none cursor-pointer accent-emerald-600"
         />
-        <div className="flex justify-between text-[10px] text-slate-400 mt-0.5">
+        <div className="flex justify-between text-[10px] text-slate-400 mt-0.5" aria-hidden="true">
           <span>400 W</span><span>2000 W</span>
         </div>
       </div>
@@ -89,13 +92,14 @@ function AddDeviceForm({
           disabled={!name.trim()}
           className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-all"
         >
-          <Check size={15} /> {t('devices.add')}
+          <Check size={15} aria-hidden="true" /> {t('devices.add')}
         </button>
         <button
           onClick={onCancel}
+          aria-label="Formular abbrechen"
           className="px-4 py-2.5 rounded-xl text-sm text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
         >
-          <X size={15} />
+          <X size={15} aria-hidden="true" />
         </button>
       </div>
     </motion.div>
@@ -151,16 +155,21 @@ function DeviceCard({
           onClick={() => setShowColors(!showColors)}
           className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center shadow-sm border-2 border-white dark:border-slate-800 mt-0.5"
           style={{ backgroundColor: device.color }}
-          title={t('devices.changeColor')}
+          aria-label={t('devices.changeColor')}
+          aria-expanded={showColors}
         >
-          <Zap size={16} className="text-white" />
+          <Zap size={16} className="text-white" aria-hidden="true" />
         </button>
 
         {/* Name + stats */}
         <div className="flex-1 min-w-0">
           {editing ? (
             <div className="flex gap-1">
+              <label htmlFor={`rename-${device.id}`} className="sr-only">
+                Neuer Name für {device.name}
+              </label>
               <input
+                id={`rename-${device.id}`}
                 autoFocus
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
@@ -170,11 +179,19 @@ function DeviceCard({
                 }}
                 className="flex-1 text-sm font-bold border-b-2 border-emerald-500 bg-transparent outline-none py-0.5"
               />
-              <button onClick={commitRename} className="text-emerald-600 hover:text-emerald-700">
-                <Check size={16} />
+              <button
+                onClick={commitRename}
+                aria-label="Umbenennung bestätigen"
+                className="text-emerald-600 hover:text-emerald-700"
+              >
+                <Check size={16} aria-hidden="true" />
               </button>
-              <button onClick={() => setEditing(false)} className="text-slate-400 hover:text-slate-600">
-                <X size={14} />
+              <button
+                onClick={() => setEditing(false)}
+                aria-label="Umbenennung abbrechen"
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X size={14} aria-hidden="true" />
               </button>
             </div>
           ) : (
@@ -182,9 +199,10 @@ function DeviceCard({
               <h3 className="text-sm font-bold truncate">{device.name}</h3>
               <button
                 onClick={() => { setEditName(device.name); setEditing(true); }}
+                aria-label={`${device.name} umbenennen`}
                 className="text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400 flex-shrink-0"
               >
-                <Pencil size={12} />
+                <Pencil size={12} aria-hidden="true" />
               </button>
             </div>
           )}
@@ -212,23 +230,26 @@ function DeviceCard({
             <div className="flex gap-1">
               <button
                 onClick={() => { onDelete(); setConfirmDelete(false); }}
+                aria-label={`Löschen von ${device.name} bestätigen`}
                 className="text-[10px] font-bold text-rose-600 bg-rose-50 dark:bg-rose-950 px-2 py-1 rounded-lg"
               >
                 {t('devices.confirmDelete')}
               </button>
               <button
                 onClick={() => setConfirmDelete(false)}
+                aria-label="Löschen abbrechen"
                 className="text-[10px] text-slate-400 hover:text-slate-600 px-1"
               >
-                <X size={12} />
+                <X size={12} aria-hidden="true" />
               </button>
             </div>
           ) : (
             <button
               onClick={() => setConfirmDelete(true)}
+              aria-label={`${device.name} löschen`}
               className="text-slate-300 hover:text-rose-500 dark:text-slate-600 dark:hover:text-rose-400 transition-colors"
             >
-              <Trash2 size={14} />
+              <Trash2 size={14} aria-hidden="true" />
             </button>
           )}
         </div>
@@ -248,6 +269,8 @@ function DeviceCard({
                 <button
                   key={c}
                   onClick={() => { onColorChange(c); setShowColors(false); }}
+                  aria-label={`Farbe ${c}${c === device.color ? ' (aktuell ausgewählt)' : ''}`}
+                  aria-pressed={c === device.color}
                   className={`w-7 h-7 rounded-full border-2 transition-transform hover:scale-105 ${
                     c === device.color ? 'border-slate-800 dark:border-white' : 'border-transparent'
                   }`}
@@ -262,13 +285,14 @@ function DeviceCard({
       {/* Go-to-dashboard button */}
       <button
         onClick={onSelect}
+        aria-label={`${device.name} – Dashboard öffnen`}
         className={`mt-3 w-full flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-medium transition-all ${
           isActive
             ? 'bg-emerald-600 text-white hover:bg-emerald-700'
             : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
         }`}
       >
-        {t('devices.openDashboard')} <ChevronRight size={14} />
+        {t('devices.openDashboard')} <ChevronRight size={14} aria-hidden="true" />
       </button>
     </motion.div>
   );
